@@ -3,29 +3,12 @@
 # === CONFIGURATION ===
 REPO_DIR="$HOME/refurbminer"
 SCREEN_NAME="refurbminer"
-SKIP_FILES=(".env" "config/config.json")
-SKIP_FOLDERS=("apps/")
 
 # Helper functions for friendly output
 info()    { echo -e "\033[1;34mℹ️  $1\033[0m"; }
 success() { echo -e "\033[1;32m✅ $1\033[0m"; }
 error()   { echo -e "\033[1;31m❌ $1\033[0m"; }
 warn()    { echo -e "\033[1;33m⚠️  $1\033[0m"; }
-
-# Run command silently with progress indication
-run_silent() {
-    local msg="$1"
-    shift
-    
-    info "$msg"
-    if "$@" > /dev/null 2>&1; then
-        success "$msg completed"
-        return 0
-    else
-        error "$msg failed"
-        return 1
-    fi
-}
 
 info "Starting refurbminer update..."
 
@@ -45,92 +28,74 @@ fi
 
 # === BACKUP IMPORTANT FILES ===
 info "Creating backup of your configuration..."
-# Create backup folder
+# Create backup folder with timestamp
 BACKUP_DIR="$REPO_DIR/backup_$(date +%Y%m%d%H%M%S)"
 mkdir -p "$BACKUP_DIR" > /dev/null 2>&1
 
-# Backup important configuration files
-for file in "${SKIP_FILES[@]}"; do
-    if [ -f "$REPO_DIR/$file" ]; then
-        mkdir -p "$BACKUP_DIR/$(dirname "$file")" > /dev/null 2>&1
-        cp -f "$REPO_DIR/$file" "$BACKUP_DIR/$file" > /dev/null 2>&1
-    fi
-done
+# Backup .env file directly
+if [ -f "$REPO_DIR/.env" ]; then
+    cp "$REPO_DIR/.env" "$BACKUP_DIR/.env" > /dev/null 2>&1
+fi
 
-# Backup entire app folders
-for folder in "${SKIP_FOLDERS[@]}"; do
-    if [ -d "$REPO_DIR/$folder" ]; then
-        mkdir -p "$BACKUP_DIR/$(dirname "$folder")" > /dev/null 2>&1
-        cp -rf "$REPO_DIR/$folder" "$BACKUP_DIR/$(dirname "$folder")" > /dev/null 2>&1
-    fi
-done
+# Backup config/config.json
+if [ -f "$REPO_DIR/config/config.json" ]; then
+    mkdir -p "$BACKUP_DIR/config" > /dev/null 2>&1
+    cp "$REPO_DIR/config/config.json" "$BACKUP_DIR/config/config.json" > /dev/null 2>&1
+fi
+
+# Backup apps directory
+if [ -d "$REPO_DIR/apps" ]; then
+    cp -r "$REPO_DIR/apps" "$BACKUP_DIR/" > /dev/null 2>&1
+fi
+
 success "Backup created"
 
-# === HANDLE LOCAL CHANGES MORE AGGRESSIVELY ===
-info "Preparing for update..."
-
+# === UPDATE REPO ===
+info "Downloading latest version..."
 # First, explicitly remove the problematic file
 if [ -f "$REPO_DIR/apps/ccminer/config.json" ]; then
     rm -f "$REPO_DIR/apps/ccminer/config.json" > /dev/null 2>&1
 fi
 
-# Reset and clean (silently)
+# Reset and clean repository
 git reset --hard HEAD > /dev/null 2>&1
 git clean -fd > /dev/null 2>&1
 
-# === UPDATE REPO ===
-info "Downloading latest version..."
+# Try standard pull first
 if git pull origin master > /dev/null 2>&1; then
     success "Downloaded latest version"
 else
-    # If pull still fails, try more aggressive approach
+    # If standard pull fails, try more aggressive approach
     info "Using alternative download method..."
-    
-    # Fetch updates but don't apply them yet
     git fetch origin > /dev/null 2>&1
-    
-    # Force checkout of master branch, overwriting local changes
     if git checkout -f origin/master > /dev/null 2>&1; then
         success "Downloaded latest version"
     else
         error "Update failed. Check your internet connection."
-        # Restore from backup if the update fails
-        info "Restoring from backup..."
-        for file in "${SKIP_FILES[@]}"; do
-            if [ -f "$BACKUP_DIR/$file" ]; then
-                mkdir -p "$REPO_DIR/$(dirname "$file")" > /dev/null 2>&1
-                cp -f "$BACKUP_DIR/$file" "$REPO_DIR/$file" > /dev/null 2>&1
-            fi
-        done
-        for folder in "${SKIP_FOLDERS[@]}"; do
-            if [ -d "$BACKUP_DIR/$folder" ]; then
-                cp -rf "$BACKUP_DIR/$folder" "$REPO_DIR/$(dirname "$folder")" > /dev/null 2>&1
-            fi
-        done
-        success "Restored previous configuration"
         exit 1
     fi
 fi
 
 # === RESTORE IMPORTANT FILES ===
 info "Restoring your personal settings..."
-for file in "${SKIP_FILES[@]}"; do
-    if [ -f "$BACKUP_DIR/$file" ]; then
-        mkdir -p "$REPO_DIR/$(dirname "$file")" > /dev/null 2>&1
-        cp -f "$BACKUP_DIR/$file" "$REPO_DIR/$file" > /dev/null 2>&1
-    fi
-done
 
-# Restore app folders
-for folder in "${SKIP_FOLDERS[@]}"; do
-    if [ -d "$BACKUP_DIR/$folder" ]; then
-        # Make sure the destination directory exists
-        mkdir -p "$REPO_DIR/$folder" > /dev/null 2>&1
-        
-        # Copy all contents from backup to the repo
-        cp -rf "$BACKUP_DIR/$folder"* "$REPO_DIR/$folder" > /dev/null 2>&1
-    fi
-done
+# Restore .env file
+if [ -f "$BACKUP_DIR/.env" ]; then
+    cp "$BACKUP_DIR/.env" "$REPO_DIR/.env" > /dev/null 2>&1
+fi
+
+# Restore config/config.json
+if [ -f "$BACKUP_DIR/config/config.json" ]; then
+    mkdir -p "$REPO_DIR/config" > /dev/null 2>&1
+    cp "$BACKUP_DIR/config/config.json" "$REPO_DIR/config/config.json" > /dev/null 2>&1
+fi
+
+# Restore apps folder
+if [ -d "$BACKUP_DIR/apps" ]; then
+    mkdir -p "$REPO_DIR/apps" > /dev/null 2>&1
+    cp -r "$BACKUP_DIR/apps/"* "$REPO_DIR/apps/" > /dev/null 2>&1
+fi
+
 success "Personal settings restored"
 
 # === INSTALL DEPENDENCIES ===
