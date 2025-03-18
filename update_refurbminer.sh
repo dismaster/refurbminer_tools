@@ -50,8 +50,16 @@ for folder in "${SKIP_FOLDERS[@]}"; do
     fi
 done
 
-# === RESET LOCAL CHANGES ===
-info "Resetting local changes to allow update..."
+# === HANDLE LOCAL CHANGES MORE AGGRESSIVELY ===
+info "Handling local changes to allow update..."
+
+# First, explicitly remove the problematic file
+if [ -f "$REPO_DIR/apps/ccminer/config.json" ]; then
+    rm -f "$REPO_DIR/apps/ccminer/config.json"
+    info "Removed apps/ccminer/config.json to prevent conflicts"
+fi
+
+# Reset and clean
 git reset --hard HEAD
 git clean -fd
 
@@ -60,22 +68,33 @@ info "Pulling latest updates..."
 if git pull origin master; then
     success "Repository updated successfully."
 else
-    error "Failed to update repository. Check your internet connection."
-    # Restore from backup if the update fails
-    info "Restoring from backup..."
-    for file in "${SKIP_FILES[@]}"; do
-        if [ -f "$BACKUP_DIR/$file" ]; then
-            mkdir -p "$REPO_DIR/$(dirname "$file")"
-            cp -f "$BACKUP_DIR/$file" "$REPO_DIR/$file"
-        fi
-    done
-    for folder in "${SKIP_FOLDERS[@]}"; do
-        if [ -d "$BACKUP_DIR/$folder" ]; then
-            cp -rf "$BACKUP_DIR/$folder" "$REPO_DIR/$(dirname "$folder")"
-        fi
-    done
-    success "Restored previous configuration"
-    exit 1
+    # If pull still fails, try more aggressive approach
+    warn "Standard pull failed. Trying alternative approach..."
+    
+    # Fetch updates but don't apply them yet
+    git fetch origin
+    
+    # Force checkout of master branch, overwriting local changes
+    if git checkout -f origin/master; then
+        success "Repository updated successfully using alternative method."
+    else
+        error "Failed to update repository. Check your internet connection."
+        # Restore from backup if the update fails
+        info "Restoring from backup..."
+        for file in "${SKIP_FILES[@]}"; do
+            if [ -f "$BACKUP_DIR/$file" ]; then
+                mkdir -p "$REPO_DIR/$(dirname "$file")"
+                cp -f "$BACKUP_DIR/$file" "$REPO_DIR/$file"
+            fi
+        done
+        for folder in "${SKIP_FOLDERS[@]}"; do
+            if [ -d "$BACKUP_DIR/$folder" ]; then
+                cp -rf "$BACKUP_DIR/$folder" "$REPO_DIR/$(dirname "$folder")"
+            fi
+        done
+        success "Restored previous configuration"
+        exit 1
+    fi
 fi
 
 # === RESTORE IMPORTANT FILES ===
@@ -91,23 +110,12 @@ done
 # Restore app folders
 for folder in "${SKIP_FOLDERS[@]}"; do
     if [ -d "$BACKUP_DIR/$folder" ]; then
-        # Only restore if the destination doesn't already have the folder
-        # This preserves any new apps that might have been added in the update
-        if [ ! -d "$REPO_DIR/$folder" ]; then
-            cp -rf "$BACKUP_DIR/$folder" "$REPO_DIR/$(dirname "$folder")"
-            success "Restored $folder"
-        else
-            # Merge the contents instead
-            for app in "$BACKUP_DIR/$folder"*; do
-                if [ -d "$app" ]; then
-                    app_name=$(basename "$app")
-                    if [ ! -d "$REPO_DIR/$folder$app_name" ]; then
-                        cp -rf "$app" "$REPO_DIR/$folder"
-                        success "Restored $folder$app_name"
-                    fi
-                fi
-            done
-        fi
+        # Make sure the destination directory exists
+        mkdir -p "$REPO_DIR/$folder"
+        
+        # Copy all contents from backup to the repo
+        cp -rf "$BACKUP_DIR/$folder"* "$REPO_DIR/$folder"
+        success "Restored $folder contents"
     fi
 done
 
@@ -131,7 +139,7 @@ fi
 
 # === START APPLICATION ===
 info "Launching '$SCREEN_NAME' in a detached screen session..."
-if screen -dmS "$SCREEN_NAME" bash -c 'npm start'; then
+if screen -dmS "$SCREEN_NAME" bash -c 'cd "$REPO_DIR" && npm start'; then
     success "'$SCREEN_NAME' is running!"
 else
     error "Failed to launch screen session!"
