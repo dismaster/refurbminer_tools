@@ -12,84 +12,99 @@ success() { echo -e "\033[1;32m✅ $1\033[0m"; }
 error()   { echo -e "\033[1;31m❌ $1\033[0m"; }
 warn()    { echo -e "\033[1;33m⚠️  $1\033[0m"; }
 
+# Run command silently with progress indication
+run_silent() {
+    local msg="$1"
+    shift
+    
+    info "$msg"
+    if "$@" > /dev/null 2>&1; then
+        success "$msg completed"
+        return 0
+    else
+        error "$msg failed"
+        return 1
+    fi
+}
+
 info "Starting refurbminer update..."
 
 # === NAVIGATE TO REPO ===
 cd "$REPO_DIR" || { error "Repo directory not found!"; exit 1; }
 
 # === STOP EXISTING SCREEN SESSION ===
-info "Stopping existing screen session '$SCREEN_NAME'..."
+info "Checking for running instances..."
 if screen -list | grep -q "$SCREEN_NAME"; then
-    screen -S "$SCREEN_NAME" -X quit && sleep 2
-    success "Stopped existing session '$SCREEN_NAME'."
+    info "Stopping existing session '$SCREEN_NAME'..."
+    screen -S "$SCREEN_NAME" -X quit > /dev/null 2>&1
+    sleep 2
+    success "Stopped mining session"
 else
-    warn "No active screen session '$SCREEN_NAME' found."
+    info "No active mining session found"
 fi
 
 # === BACKUP IMPORTANT FILES ===
-info "Backing up config files..."
+info "Creating backup of your configuration..."
 # Create backup folder
 BACKUP_DIR="$REPO_DIR/backup_$(date +%Y%m%d%H%M%S)"
-mkdir -p "$BACKUP_DIR"
+mkdir -p "$BACKUP_DIR" > /dev/null 2>&1
 
 # Backup important configuration files
 for file in "${SKIP_FILES[@]}"; do
     if [ -f "$REPO_DIR/$file" ]; then
-        mkdir -p "$BACKUP_DIR/$(dirname "$file")"
-        cp -f "$REPO_DIR/$file" "$BACKUP_DIR/$file"
-        success "Backed up $file"
+        mkdir -p "$BACKUP_DIR/$(dirname "$file")" > /dev/null 2>&1
+        cp -f "$REPO_DIR/$file" "$BACKUP_DIR/$file" > /dev/null 2>&1
     fi
 done
 
 # Backup entire app folders
 for folder in "${SKIP_FOLDERS[@]}"; do
     if [ -d "$REPO_DIR/$folder" ]; then
-        mkdir -p "$BACKUP_DIR/$(dirname "$folder")"
-        cp -rf "$REPO_DIR/$folder" "$BACKUP_DIR/$(dirname "$folder")"
-        success "Backed up $folder"
+        mkdir -p "$BACKUP_DIR/$(dirname "$folder")" > /dev/null 2>&1
+        cp -rf "$REPO_DIR/$folder" "$BACKUP_DIR/$(dirname "$folder")" > /dev/null 2>&1
     fi
 done
+success "Backup created"
 
 # === HANDLE LOCAL CHANGES MORE AGGRESSIVELY ===
-info "Handling local changes to allow update..."
+info "Preparing for update..."
 
 # First, explicitly remove the problematic file
 if [ -f "$REPO_DIR/apps/ccminer/config.json" ]; then
-    rm -f "$REPO_DIR/apps/ccminer/config.json"
-    info "Removed apps/ccminer/config.json to prevent conflicts"
+    rm -f "$REPO_DIR/apps/ccminer/config.json" > /dev/null 2>&1
 fi
 
-# Reset and clean
-git reset --hard HEAD
-git clean -fd
+# Reset and clean (silently)
+git reset --hard HEAD > /dev/null 2>&1
+git clean -fd > /dev/null 2>&1
 
 # === UPDATE REPO ===
-info "Pulling latest updates..."
-if git pull origin master; then
-    success "Repository updated successfully."
+info "Downloading latest version..."
+if git pull origin master > /dev/null 2>&1; then
+    success "Downloaded latest version"
 else
     # If pull still fails, try more aggressive approach
-    warn "Standard pull failed. Trying alternative approach..."
+    info "Using alternative download method..."
     
     # Fetch updates but don't apply them yet
-    git fetch origin
+    git fetch origin > /dev/null 2>&1
     
     # Force checkout of master branch, overwriting local changes
-    if git checkout -f origin/master; then
-        success "Repository updated successfully using alternative method."
+    if git checkout -f origin/master > /dev/null 2>&1; then
+        success "Downloaded latest version"
     else
-        error "Failed to update repository. Check your internet connection."
+        error "Update failed. Check your internet connection."
         # Restore from backup if the update fails
         info "Restoring from backup..."
         for file in "${SKIP_FILES[@]}"; do
             if [ -f "$BACKUP_DIR/$file" ]; then
-                mkdir -p "$REPO_DIR/$(dirname "$file")"
-                cp -f "$BACKUP_DIR/$file" "$REPO_DIR/$file"
+                mkdir -p "$REPO_DIR/$(dirname "$file")" > /dev/null 2>&1
+                cp -f "$BACKUP_DIR/$file" "$REPO_DIR/$file" > /dev/null 2>&1
             fi
         done
         for folder in "${SKIP_FOLDERS[@]}"; do
             if [ -d "$BACKUP_DIR/$folder" ]; then
-                cp -rf "$BACKUP_DIR/$folder" "$REPO_DIR/$(dirname "$folder")"
+                cp -rf "$BACKUP_DIR/$folder" "$REPO_DIR/$(dirname "$folder")" > /dev/null 2>&1
             fi
         done
         success "Restored previous configuration"
@@ -98,12 +113,11 @@ else
 fi
 
 # === RESTORE IMPORTANT FILES ===
-info "Restoring config files..."
+info "Restoring your personal settings..."
 for file in "${SKIP_FILES[@]}"; do
     if [ -f "$BACKUP_DIR/$file" ]; then
-        mkdir -p "$REPO_DIR/$(dirname "$file")"
-        cp -f "$BACKUP_DIR/$file" "$REPO_DIR/$file"
-        success "Restored $file"
+        mkdir -p "$REPO_DIR/$(dirname "$file")" > /dev/null 2>&1
+        cp -f "$BACKUP_DIR/$file" "$REPO_DIR/$file" > /dev/null 2>&1
     fi
 done
 
@@ -111,39 +125,42 @@ done
 for folder in "${SKIP_FOLDERS[@]}"; do
     if [ -d "$BACKUP_DIR/$folder" ]; then
         # Make sure the destination directory exists
-        mkdir -p "$REPO_DIR/$folder"
+        mkdir -p "$REPO_DIR/$folder" > /dev/null 2>&1
         
         # Copy all contents from backup to the repo
-        cp -rf "$BACKUP_DIR/$folder"* "$REPO_DIR/$folder"
-        success "Restored $folder contents"
+        cp -rf "$BACKUP_DIR/$folder"* "$REPO_DIR/$folder" > /dev/null 2>&1
     fi
 done
+success "Personal settings restored"
 
 # === INSTALL DEPENDENCIES ===
-info "Installing npm dependencies (this may take a while)..."
-if npm install; then
-    success "Dependencies installed."
+info "Installing updates (this may take a while)..."
+if npm install > /dev/null 2>&1; then
+    success "Updates installed"
 else
-    error "Dependency installation failed!"
+    error "Update installation failed!"
     exit 1
 fi
 
 # === BUILD APPLICATION ===
-info "Building the application (this may take a moment)..."
-if npm run build; then
-    success "Application built successfully."
+info "Preparing application for use (please wait)..."
+if npm run build > /dev/null 2>&1; then
+    success "Application prepared successfully"
 else
-    error "Build process failed!"
+    error "Application preparation failed!"
     exit 1
 fi
 
 # === START APPLICATION ===
-info "Launching '$SCREEN_NAME' in a detached screen session..."
-if screen -dmS "$SCREEN_NAME" bash -c 'cd "$REPO_DIR" && npm start'; then
-    success "'$SCREEN_NAME' is running!"
+info "Starting mining process..."
+if screen -dmS "$SCREEN_NAME" bash -c "cd '$REPO_DIR' && npm start" > /dev/null 2>&1; then
+    success "Mining process started"
 else
-    error "Failed to launch screen session!"
+    error "Failed to start mining process!"
     exit 1
 fi
 
-success "🎉 refurbminer update complete!"
+success "🎉 RefurbMiner updated and running!"
+echo
+echo -e "\033[1;32mTo view mining status: screen -r refurbminer\033[0m"
+echo -e "\033[1;33mTo detach from mining view: press Ctrl+A then D\033[0m"
