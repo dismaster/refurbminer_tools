@@ -2,7 +2,7 @@
 
 ![RefurbMiner Logo](https://gui.rg3d.eu/assets/img/logo.png)
 
-A collection of tools for RefurbMiner - the repurposed device miner for VTC and other cryptocurrencies.
+A collection of tools for RefurbMiner - the repurposed device miner for VERUS and other cryptocurrencies.
 
 ## Overview
 
@@ -15,6 +15,24 @@ This repository contains tools to help with the installation, upgrade, and manag
 | `update_refurbminer.sh` | Update an existing RefurbMiner installation |
 
 ## Installation Guide
+
+### Prerequisites for Android (Termux)
+
+If you're using Termux on Android, you'll need to install some additional apps:
+
+1. Install Termux from F-Droid (recommended) or Google Play Store
+2. Install [Termux:Boot](https://f-droid.org/en/packages/com.termux.boot/) - required for auto-starting at boot
+3. Install [Termux:API](https://f-droid.org/en/packages/com.termux.api/) - required for device interaction
+
+After installing these apps, you'll need to set up basic permissions:
+```bash
+# Grant storage permission
+termux-setup-storage
+
+# Install required packages
+pkg update
+pkg install wget curl
+```
 
 ### Fresh Installation
 
@@ -115,6 +133,53 @@ After installation, you can use these commands to manage your miner:
    Check your internet connection or try with `--insecure` option if you have SSL issues:
    ```bash
    wget --no-check-certificate -q -O install_refurbminer.sh https://raw.githubusercontent.com/dismaster/refurbminer_tools/main/install_refurbminer.sh
+   ```
+
+4. **Termux Package Installation Issues**
+   
+   If you're having trouble installing packages in Termux, the default repository might be unavailable or outdated. Try changing to a different repository:
+   
+   ```bash
+   # Install termux-tools if not already installed
+   pkg install termux-tools
+   
+   # Change repository
+   termux-change-repo
+   ```
+   
+   This will open a menu where you can select a different mirror. Choose a different repository (e.g., Grimler or BFSU) and try installing again.
+   
+   Alternatively, you can manually update your sources:
+   
+   ```bash
+   # Edit the sources.list file
+   nano $PREFIX/etc/apt/sources.list
+   ```
+   
+   Replace the existing URL with:
+   ```
+   deb https://packages.termux.dev/apt/termux-main stable main
+   ```
+   
+   Then update and try again:
+   ```bash
+   pkg update
+   pkg upgrade
+   ```
+
+5. **Termux Boot Not Working**
+
+   If your miner isn't starting at boot on Android:
+   
+   - Make sure you've installed the Termux:Boot app from F-Droid
+   - Enable autostart permission for Termux:Boot in Android settings
+   - Ensure your script permissions are correct:
+   ```bash
+   chmod -R 755 ~/.termux/boot/
+   ```
+   - Check if the boot script exists:
+   ```bash
+   ls -la ~/.termux/boot/
    ```
 
 ### Getting Help
