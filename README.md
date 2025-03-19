@@ -90,12 +90,14 @@ chmod +x update_refurbminer.sh
 
 ## Supported Devices
 
-RefurbMiner is designed to work on a variety of devices including:
+RefurbMiner is designed to work on a variety of 64-bit devices including:
 
-- Android phones and tablets (via Termux)
-- Raspberry Pi and other ARM-based single-board computers
-- x86/x64 desktop and laptop computers
-- Various Linux distributions
+- Android phones and tablets with 64-bit architecture (via Termux)
+- Raspberry Pi and other ARM64-based single-board computers
+- x86_64 desktop and laptop computers
+- Various 64-bit Linux distributions
+
+> **Important Note:** 32-bit operating systems and devices are NOT supported. The mining software requires a 64-bit architecture to function properly, as mining on 32-bit systems is not efficient. The installer will only download and configure 64-bit versions of the necessary software.
 
 ## Managing Your Miner
 
