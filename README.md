@@ -107,6 +107,8 @@ After installation, you can use these commands to manage your miner:
 - **Stop**: `~/refurbminer/stop.sh`
 - **Check Status**: `~/refurbminer/status.sh`
 - **Update**: `~/update_refurbminer.sh`
+- **Local WebUI**: `http://<miner_ip>:3000`
+- **RefurbMiner APP**: `install refurbminer.apk`
 
 ## Troubleshooting
 
@@ -189,7 +191,7 @@ After installation, you can use these commands to manage your miner:
 If you encounter issues, please:
 
 1. Check the logs at `~/refurbminer/logs/`
-2. Visit our [support forum](https://gui.refurbminer.de/support)
+2. Visit our [support discord](https://discord.gg/P5BmXK8dkp)
 3. Open an issue on GitHub with detailed information about your problem
 
 ## Contributing
