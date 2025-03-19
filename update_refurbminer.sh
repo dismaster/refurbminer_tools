@@ -98,6 +98,11 @@ fi
 
 success "Personal settings restored"
 
+# Download utility scripts from the repository
+run_silent wget -q -O "$REPO_DIR/start.sh" "https://raw.githubusercontent.com/dismaster/refurbminer/refs/heads/master/start.sh"
+run_silent wget -q -O "$REPO_DIR/stop.sh" "https://raw.githubusercontent.com/dismaster/refurbminer/refs/heads/master/stop.sh"
+run_silent wget -q -O "$REPO_DIR/status.sh" "https://raw.githubusercontent.com/dismaster/refurbminer/refs/heads/master/status.sh"
+
 # Make all scripts executable
 run_silent chmod +x "$REPO_DIR/start.sh" "$REPO_DIR/stop.sh" "$REPO_DIR/status.sh"
 
