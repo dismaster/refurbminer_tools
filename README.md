@@ -16,7 +16,7 @@ This repository contains tools to help with the installation, upgrade, and manag
 
 ## Installation Guide
 
-### ![Termux Setup](banner_1.png) Prerequisites for Android (Termux)
+### ![Termux Setup](images/banner_1.png) Prerequisites for Android (Termux)
 
 If you're using Termux on Android, you'll need to install some additional apps:
 
