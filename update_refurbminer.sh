@@ -227,3 +227,4 @@ success "🎉 RefurbMiner updated and running!"
 echo
 echo -e "\033[1;32mTo view mining status: screen -r refurbminer\033[0m"
 echo -e "\033[1;33mTo detach from mining view: press Ctrl+A then D\033[0m"
+echo -e "\033[1;32mOr use: ./refurbminer/status.sh\033[0m"
