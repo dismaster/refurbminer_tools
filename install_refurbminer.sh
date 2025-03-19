@@ -269,11 +269,11 @@ termux_setup() {
         display "To enable ADB, install Android Debug Bridge and enable USB debugging in developer options."
     fi
     
-    # Update repositories and install required packages
-    run_silent pkg update -y
-    run_silent pkg upgrade -y
-    display "Installing Termux packages..."
-    run_silent pkg install -y openssl cronie termux-services termux-auth libjansson wget git screen nodejs
+# Update the Termux package installation line with the complete set of packages
+run_silent pkg update -y
+run_silent pkg upgrade -y
+display "Installing Termux packages..."
+run_silent pkg install -y openssl cronie termux-services termux-auth libjansson wget nano git screen openssh termux-services libjansson netcat-openbsd jq termux-api iproute2 tsu android-tools
     
     # Install ADB if not present and user has root
     if [ "$HAS_ROOT" = true ] && ! command -v adb &>/dev/null; then
@@ -590,8 +590,34 @@ select_ccminer_version() {
     log "CPU model: $CPU_MODEL"
     log "CPU architecture: $CPU_ARCH"
 
+    # Parse complex CPU model names like "Cortex-A55 exynos-m3"
+    # Check for Exynos custom cores
+    if echo "$CPU_MODEL" | grep -q "exynos-m3"; then
+        if echo "$CPU_MODEL" | grep -q "A55"; then
+            CC_BRANCH="em3-a55"
+            log "Detected Exynos M3 with Cortex-A55"
+        else
+            CC_BRANCH="em3" 
+            log "Detected Exynos M3"
+        fi
+    elif echo "$CPU_MODEL" | grep -q "exynos-m4"; then
+        if echo "$CPU_MODEL" | grep -q "A75" && echo "$CPU_MODEL" | grep -q "A55"; then
+            CC_BRANCH="em4-a75-a55"
+            log "Detected Exynos M4 with Cortex-A75 and A55"
+        else
+            CC_BRANCH="em4"
+            log "Detected Exynos M4"
+        fi
+    elif echo "$CPU_MODEL" | grep -q "exynos-m5"; then
+        if echo "$CPU_MODEL" | grep -q "A76" && echo "$CPU_MODEL" | grep -q "A55"; then
+            CC_BRANCH="em5-a76-a55"
+            log "Detected Exynos M5 with Cortex-A76 and A55"
+        else
+            CC_BRANCH="em5"
+            log "Detected Exynos M5"
+        fi
     # Prioritize combined CPU configurations first, and then fallback to single core types
-    if echo "$CPU_MODEL" | grep -q "A76" && echo "$CPU_MODEL" | grep -q "A55"; then
+    elif echo "$CPU_MODEL" | grep -q "A76" && echo "$CPU_MODEL" | grep -q "A55"; then
         CC_BRANCH="a76-a55"
     elif echo "$CPU_MODEL" | grep -q "A75" && echo "$CPU_MODEL" | grep -q "A55"; then
         CC_BRANCH="a75-a55"
@@ -599,14 +625,10 @@ select_ccminer_version() {
         CC_BRANCH="a72-a53"
     elif echo "$CPU_MODEL" | grep -q "A73" && echo "$CPU_MODEL" | grep -q "A53"; then
         CC_BRANCH="a73-a53"
-    elif echo "$CPU_MODEL" | grep -q "EM5" && echo "$CPU_MODEL" | grep -q "A76" && echo "$CPU_MODEL" | grep -q "A55"; then
-        CC_BRANCH="em5-a76-a55"
-    elif echo "$CPU_MODEL" | grep -q "EM4" && echo "$CPU_MODEL" | grep -q "A75" && echo "$CPU_MODEL" | grep -q "A55"; then
-        CC_BRANCH="em4-a75-a55"
-    elif echo "$CPU_MODEL" | grep -q "EM3" && echo "$CPU_MODEL" | grep -q "A55"; then
-        CC_BRANCH="em3-a55"
     elif echo "$CPU_MODEL" | grep -q "A57" && echo "$CPU_MODEL" | grep -q "A53"; then
         CC_BRANCH="a57-a53"
+    elif echo "$CPU_MODEL" | grep -q "X1" && echo "$CPU_MODEL" | grep -q "A78" && echo "$CPU_MODEL" | grep -q "A55"; then
+        CC_BRANCH="x1-a78-a55"
     # Now check for single-core architectures if no combinations match
     elif echo "$CPU_MODEL" | grep -q "A35"; then
         CC_BRANCH="a35"
@@ -632,8 +654,6 @@ select_ccminer_version() {
         CC_BRANCH="a78"
     elif echo "$CPU_MODEL" | grep -q "A78C"; then
         CC_BRANCH="a78c"
-    elif echo "$CPU_MODEL" | grep -q "X1" && echo "$CPU_MODEL" | grep -q "A78" && echo "$CPU_MODEL" | grep -q "A55"; then
-        CC_BRANCH="x1-a78-a55"
     # Check architecture as a fallback if model name doesn't have ARM core info
     elif [ "$CPU_ARCH" = "aarch64" ] || [ "$CPU_ARCH" = "arm64" ]; then
         # Determine a reasonable fallback for ARM64 architectures
@@ -651,8 +671,14 @@ select_ccminer_version() {
 
     log "Selected ccminer branch: $CC_BRANCH"
     
-    # Download the appropriate ccminer binary
+    # Add a fallback check if the selected branch doesn't exist or isn't accessible
     display "Downloading optimal ccminer version for your CPU..."
+    if ! wget -q --spider "https://raw.githubusercontent.com/Darktron/pre-compiled/$CC_BRANCH/ccminer" 2>/dev/null; then
+        warn "Selected version not available. Falling back to generic version..."
+        log "Branch $CC_BRANCH not available, falling back to generic"
+        CC_BRANCH="generic"
+    fi
+    
     run_silent wget -q -O "$INSTALL_DIR/apps/ccminer/ccminer" "https://raw.githubusercontent.com/Darktron/pre-compiled/$CC_BRANCH/ccminer"
     run_silent chmod +x "$INSTALL_DIR/apps/ccminer/ccminer"
     
@@ -744,6 +770,27 @@ case "$OS" in
 #!/data/data/com.termux/files/usr/bin/bash
 # RefurbMiner autostart script with root optimizations
 
+# Source the environment (if needed)
+source /data/data/com.termux/files/usr/etc/profile
+
+# Acquire wake lock to prevent device sleep
+if command -v termux-wake-lock &>/dev/null; then
+    termux-wake-lock
+fi
+
+# Start SSH daemon if available
+if command -v sshd &>/dev/null; then
+    sshd
+fi
+
+# Start cron daemon if available
+if command -v crond &>/dev/null; then
+    crond
+fi
+
+# Clean up any stale screen sessions
+screen -wipe
+
 # Set CPU governor to performance if available
 if su -c "id -u" 2>/dev/null | grep -q "^0$"; then
     # Find all CPU governor files
@@ -767,15 +814,88 @@ if su -c "id -u" 2>/dev/null | grep -q "^0$"; then
     su -c "echo -17 > /proc/self/oom_adj" 2>/dev/null || true
 fi
 
+# Apply ADB optimizations if available
+if command -v adb &>/dev/null; then
+    # Set battery level to 100% in Android's eyes
+    adb shell dumpsys battery set level 100 2>/dev/null || true
+    # Keep screen on (prevents throttling on some devices)
+    adb shell svc power stayon true 2>/dev/null || true
+    # Add Termux apps to battery optimization whitelist
+    adb shell dumpsys deviceidle whitelist +com.termux.boot 2>/dev/null || true
+    adb shell dumpsys deviceidle whitelist +com.termux 2>/dev/null || true
+    adb shell dumpsys deviceidle whitelist +com.termux.api 2>/dev/null || true
+    # Improve system responsiveness
+    adb shell settings put global system_capabilities 100 2>/dev/null || true
+    adb shell settings put global sem_enhanced_cpu_responsiveness 1 2>/dev/null || true
+    # Keep WiFi on during sleep
+    adb shell settings put global wifi_sleep_policy 2 2>/dev/null || true
+fi
+
 # Start mining in background
 cd $INSTALL_DIR && screen -dmS refurbminer npm start
+
+# Flash LED 3 times to indicate successful startup
+if command -v termux-torch &>/dev/null; then
+    sleep 2
+    termux-torch on
+    sleep 0.5
+    termux-torch off
+    sleep 0.5
+    termux-torch on
+    sleep 0.5
+    termux-torch off
+    sleep 0.5
+    termux-torch on
+    sleep 0.5
+    termux-torch off
+fi
 
 exit 0
 EOF
         else
-            # Download boot script from repository if no root
-            display "Downloading boot script..."
-            run_silent wget -q -O "$HOME/.termux/boot/boot_start" "https://raw.githubusercontent.com/dismaster/refurbminer_tools/refs/heads/main/boot_start"
+            # For non-root devices, create a more basic but still enhanced boot script
+            display "Creating boot script..."
+            
+            cat > "$HOME/.termux/boot/boot_start" << EOF
+#!/data/data/com.termux/files/usr/bin/bash
+# RefurbMiner autostart script
+
+# Source the environment
+source /data/data/com.termux/files/usr/etc/profile
+
+# Acquire wake lock to prevent device sleep
+if command -v termux-wake-lock &>/dev/null; then
+    termux-wake-lock
+fi
+
+# Start SSH daemon if available
+if command -v sshd &>/dev/null; then
+    sshd
+fi
+
+# Start cron daemon if available
+if command -v crond &>/dev/null; then
+    crond
+fi
+
+# Clean up any stale screen sessions
+screen -wipe
+
+# Start mining in background
+cd $INSTALL_DIR && screen -dmS refurbminer npm start
+
+# Flash LED 3 times to indicate successful startup
+if command -v termux-torch &>/dev/null; then
+    termux-torch on
+    termux-torch off
+    termux-torch on
+    termux-torch off
+    termux-torch on
+    termux-torch off
+fi
+
+exit 0
+EOF
         fi
         
         # Make boot script executable
@@ -842,43 +962,17 @@ esac
 # Create convenient start/stop scripts
 display "Creating utility scripts..."
 
-# Create start script
-cat > "$INSTALL_DIR/start.sh" << EOF
-#!/bin/bash
-cd \$(dirname "\$0")
-if screen -list | grep -q "refurbminer"; then
-    echo "RefurbMiner is already running!"
-else
-    echo "Starting RefurbMiner..."
-    screen -dmS refurbminer npm start
-    echo "RefurbMiner started in screen session. To view, use: screen -r refurbminer"
-fi
-EOF
+# Make all scripts executable
+run_silent chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/status.sh"
 
-# Create stop script
-cat > "$INSTALL_DIR/stop.sh" << EOF
-#!/bin/bash
-if screen -list | grep -q "refurbminer"; then
-    echo "Stopping RefurbMiner..."
-    screen -S refurbminer -X quit
-    echo "RefurbMiner stopped."
+# Verify scripts were downloaded successfully
+if [ -f "$INSTALL_DIR/start.sh" ] && [ -f "$INSTALL_DIR/stop.sh" ] && [ -f "$INSTALL_DIR/status.sh" ]; then
+    success "Utility scripts installed successfully"
+    log "Utility scripts installed in $INSTALL_DIR"
 else
-    echo "RefurbMiner is not running."
+    warn "Failed to download one or more utility scripts"
+    log "Issues downloading utility scripts from repository"
 fi
-EOF
-
-# Create status script
-cat > "$INSTALL_DIR/status.sh" << EOF
-#!/bin/bash
-if screen -list | grep -q "refurbminer"; then
-    echo "✅ RefurbMiner is running."
-    echo "To view the mining console, use: screen -r refurbminer"
-    echo "To detach from the console (leave it running), press Ctrl+A, then D."
-else
-    echo "❌ RefurbMiner is not running."
-    echo "Start it with: ./start.sh"
-fi
-EOF
 
 # Download update script to the user's home directory, not the app folder
 display "Setting up automatic updater..."
