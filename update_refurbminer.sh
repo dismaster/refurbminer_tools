@@ -5,12 +5,31 @@ REPO_DIR="$HOME/refurbminer"
 SCREEN_NAME="refurbminer"
 # Store backup outside of the git repo to prevent it being cleaned
 BACKUP_DIR="$HOME/refurbminer_backup_$(date +%Y%m%d%H%M%S)"
+# Configure maximum number of backup folders to keep
+MAX_BACKUPS=3
 
 # Helper functions for friendly output
 info()    { echo -e "\033[1;34mℹ️  $1\033[0m"; }
 success() { echo -e "\033[1;32m✅ $1\033[0m"; }
 error()   { echo -e "\033[1;31m❌ $1\033[0m"; }
 warn()    { echo -e "\033[1;33m⚠️  $1\033[0m"; }
+
+# Function to clean up old backup folders
+cleanup_old_backups() {
+    info "Cleaning up old backups..."
+    # List all backup folders, sort by modification time (newest first), skip the newest 3
+    local old_backups=$(find "$HOME" -maxdepth 1 -type d -name "refurbminer_backup_*" | sort -r | tail -n +$((MAX_BACKUPS+1)))
+    
+    if [ -z "$old_backups" ]; then
+        info "No old backups to clean up"
+    else
+        for backup in $old_backups; do
+            rm -rf "$backup"
+            info "Removed old backup: $(basename "$backup")"
+        done
+        success "Backup cleanup completed"
+    fi
+}
 
 info "Starting refurbminer update..."
 
@@ -50,6 +69,9 @@ if [ -d "$REPO_DIR/apps" ]; then
 fi
 
 success "Backup created"
+
+# === CLEAN UP OLD BACKUPS ===
+cleanup_old_backups
 
 # === UPDATE REPO ===
 info "Downloading latest version..."
