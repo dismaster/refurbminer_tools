@@ -269,12 +269,31 @@ termux_setup() {
         display "To enable ADB, install Android Debug Bridge and enable USB debugging in developer options."
     fi
     
-# Update the Termux package installation line with the complete set of packages
-run_silent pkg update -y
-run_silent pkg upgrade -y
-display "Installing Termux packages..."
-run_silent pkg install -y openssl cronie termux-services termux-auth libjansson wget nano git screen openssh termux-services libjansson netcat-openbsd jq termux-api iproute2 tsu android-tools
+    # Update the Termux package installation line with the complete set of packages
+    run_silent pkg update -y
+    run_silent pkg upgrade -y
+    display "Installing Termux packages..."
+    run_silent pkg install -y openssl cronie termux-services termux-auth libjansson wget nano git screen openssh termux-services libjansson netcat-openbsd jq termux-api iproute2 tsu android-tools nodejs
     
+    # Verify critical installations with better error handling for Termux
+    if ! command -v git &>/dev/null || ! command -v node &>/dev/null; then
+        if [ "$OS" = "termux" ]; then
+            warn "Node.js not detected. Attempting to install nodejs specifically..."
+            run_silent pkg install -y nodejs
+            
+            # Check again after explicit installation
+            if ! command -v node &>/dev/null; then
+                error "Node.js installation failed! Please try manually with: pkg install nodejs"
+                return 1
+            else
+                success "Node.js installed successfully."
+            fi
+        else
+            error "Git or Node.js installation failed! Please install manually."
+            return 1
+        fi
+    fi
+
     # Install ADB if not present and user has root
     if [ "$HAS_ROOT" = true ] && ! command -v adb &>/dev/null; then
         display "Installing ADB for enhanced functionality..."
