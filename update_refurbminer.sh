@@ -3,8 +3,6 @@
 # === CONFIGURATION ===
 REPO_DIR="$HOME/refurbminer"
 SCREEN_NAME="refurbminer"
-# Store backup outside of the git repo to prevent it being cleaned
-BACKUP_DIR="$HOME/refurbminer_backup_$(date +%Y%m%d%H%M%S)"
 
 # Helper functions for friendly output
 info()    { echo -e "\033[1;34mℹ️  $1\033[0m"; }
@@ -30,23 +28,24 @@ fi
 
 # === BACKUP IMPORTANT FILES ===
 info "Creating backup of your configuration..."
-# Create backup folder OUTSIDE the git repo
+# Create backup folder with timestamp
+BACKUP_DIR="$REPO_DIR/backup_$(date +%Y%m%d%H%M%S)"
 mkdir -p "$BACKUP_DIR" > /dev/null 2>&1
 
-# Backup .env file
+# Backup .env file directly
 if [ -f "$REPO_DIR/.env" ]; then
-    cp -f "$REPO_DIR/.env" "$BACKUP_DIR/.env" > /dev/null 2>&1
+    cp "$REPO_DIR/.env" "$BACKUP_DIR/.env" > /dev/null 2>&1
 fi
 
 # Backup config/config.json
 if [ -f "$REPO_DIR/config/config.json" ]; then
     mkdir -p "$BACKUP_DIR/config" > /dev/null 2>&1
-    cp -f "$REPO_DIR/config/config.json" "$BACKUP_DIR/config/config.json" > /dev/null 2>&1
+    cp "$REPO_DIR/config/config.json" "$BACKUP_DIR/config/config.json" > /dev/null 2>&1
 fi
 
 # Backup apps directory
 if [ -d "$REPO_DIR/apps" ]; then
-    cp -rf "$REPO_DIR/apps" "$BACKUP_DIR/" > /dev/null 2>&1
+    cp -r "$REPO_DIR/apps" "$BACKUP_DIR/" > /dev/null 2>&1
 fi
 
 success "Backup created"
@@ -82,22 +81,25 @@ info "Restoring your personal settings..."
 
 # Restore .env file
 if [ -f "$BACKUP_DIR/.env" ]; then
-    cp -f "$BACKUP_DIR/.env" "$REPO_DIR/.env" > /dev/null 2>&1
+    cp "$BACKUP_DIR/.env" "$REPO_DIR/.env" > /dev/null 2>&1
 fi
 
 # Restore config/config.json
 if [ -f "$BACKUP_DIR/config/config.json" ]; then
     mkdir -p "$REPO_DIR/config" > /dev/null 2>&1
-    cp -f "$BACKUP_DIR/config/config.json" "$REPO_DIR/config/config.json" > /dev/null 2>&1
+    cp "$BACKUP_DIR/config/config.json" "$REPO_DIR/config/config.json" > /dev/null 2>&1
 fi
 
 # Restore apps folder
 if [ -d "$BACKUP_DIR/apps" ]; then
     mkdir -p "$REPO_DIR/apps" > /dev/null 2>&1
-    cp -rf "$BACKUP_DIR/apps/"* "$REPO_DIR/apps/" > /dev/null 2>&1
+    cp -r "$BACKUP_DIR/apps/"* "$REPO_DIR/apps/" > /dev/null 2>&1
 fi
 
 success "Personal settings restored"
+
+# Make all scripts executable
+run_silent chmod +x "$REPO_DIR/start.sh" "$REPO_DIR/stop.sh" "$REPO_DIR/status.sh"
 
 # === INSTALL DEPENDENCIES ===
 info "Installing updates (this may take a while)..."
