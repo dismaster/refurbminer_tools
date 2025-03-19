@@ -16,7 +16,7 @@ This repository contains tools to help with the installation, upgrade, and manag
 
 ## Installation Guide
 
-### ![Termux Setup](images/banner_1.png) Prerequisites for Android (Termux)
+### ![Termux Setup](images/banner_1.png)
 
 If you're using Termux on Android, you'll need to install some additional apps:
 
@@ -34,7 +34,7 @@ pkg update
 pkg install wget curl
 ```
 
-### Fresh Installation
+### ![Fresh Installation](images/banner_2.png)
 
 If you're starting from scratch with a new device, use the installation script:
 
@@ -51,7 +51,7 @@ chmod +x install_refurbminer.sh
 
 During installation, you'll be asked to provide your RIG token. You can obtain this from the [RefurbMiner website](https://gui.refurbminer.de).
 
-### Upgrading from Old Version
+### ![Upgrading from Old Version](images/banner_3.png)
 
 If you were using the previous version with CCminer and scripts like `monitor.sh`, `jobscheduler.sh`, etc., you should use the upgrade script to transition to the new RefurbMiner:
 
@@ -75,7 +75,7 @@ The upgrade script will:
 
 > **Important Note:** Your old rig password is NOT the same as the new RIG token. You'll need to obtain a new RIG token from the [RefurbMiner website](https://gui.refurbminer.de).
 
-### Updating an Existing Installation
+### ![Updating an Existing Installation](images/banner_4.png)
 
 If you already have RefurbMiner installed and want to update to the latest version:
 
@@ -88,7 +88,7 @@ chmod +x update_refurbminer.sh
 ./update_refurbminer.sh
 ```
 
-## Supported Devices
+## ![Supported Devices](images/banner_5.png)
 
 RefurbMiner is designed to work on a variety of 64-bit devices including:
 
