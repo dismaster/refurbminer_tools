@@ -1,6 +1,6 @@
 # RefurbMiner Tools
 
-![RefurbMiner Logo](https://gui.refurbminer.de/assets/img/logo.png)
+![RefurbMiner Logo](https://gui.rg3d.eu/assets/img/logo.png)
 
 A collection of tools for RefurbMiner - the repurposed device miner for VTC and other cryptocurrencies.
 
