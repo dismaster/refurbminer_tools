@@ -70,7 +70,7 @@ pkg install openssh
 passwd
 
 # Find your device's IP address
-ip address
+ifconfig
 
 # Start the SSH server
 sshd
