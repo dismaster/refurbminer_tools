@@ -347,6 +347,67 @@ detect_os_and_setup_packages() {
     
     display "Detected OS: $OS"
     
+    # Determine if sudo is available and if user has direct root privileges
+    HAS_SUDO=false
+    IS_ROOT=false
+    
+    # Check if user is root
+    if [ "$(id -u)" = "0" ]; then
+        IS_ROOT=true
+        log "Running as root user"
+    else
+        log "Running as non-root user"
+        # Check if sudo is available
+        if command -v sudo &>/dev/null; then
+            # Verify sudo works without asking for password
+            if sudo -n true 2>/dev/null; then
+                HAS_SUDO=true
+                log "Sudo is available and configured for passwordless use"
+            else
+                # Try with a fake command to see if sudo prompts for password or fails
+                sudo_output=$(sudo -l 2>&1)
+                if echo "$sudo_output" | grep -q "password"; then
+                    HAS_SUDO=true
+                    log "Sudo is available but requires password"
+                    display "Note: You may be prompted for your password during installation"
+                else
+                    log "Sudo is not available or user doesn't have sudo privileges"
+                    warn "No sudo privileges detected. Some features may not work properly."
+                fi
+            fi
+        else
+            log "Sudo command not found"
+            warn "The 'sudo' command is not available on this system."
+        fi
+    fi
+    
+    # Function to execute commands with appropriate privilege level
+    exec_pkg_cmd() {
+        local cmd_args=("$@")
+        
+        if [ "$IS_ROOT" = true ]; then
+            # Already root, execute directly
+            log "Executing as root: ${cmd_args[*]}"
+            run_silent "${cmd_args[@]}"
+        elif [ "$HAS_SUDO" = true ]; then
+            # Use sudo
+            log "Executing with sudo: ${cmd_args[*]}"
+            run_silent sudo "${cmd_args[@]}"
+        else
+            # No sudo, no root - try direct execution and hope it works
+            # (useful for user-level package managers or containers)
+            log "Attempting execution without root privileges: ${cmd_args[*]}"
+            if run_silent "${cmd_args[@]}"; then
+                return 0
+            else
+                error "Failed to execute: ${cmd_args[*]}"
+                error "This command may require root privileges."
+                error "Try running this script as root or with sudo."
+                return 1
+            fi
+        fi
+    }
+    
     # Check if the system is ARM-based
     IS_ARM=false
     ARCH=$(uname -m)
@@ -377,22 +438,33 @@ detect_os_and_setup_packages() {
         debian|raspberrypi)
             display "Setting up Debian/Raspberry Pi environment..."
             # Update repositories
-            run_silent sudo apt-get update
+            if ! exec_pkg_cmd apt-get update; then
+                error "Failed to update package repositories. Check your network connection."
+                error "If you're not running as root, try using 'sudo' or running as root user."
+                return 1
+            fi
             
             display "Installing common packages..."
-            run_silent sudo apt-get install -y git nodejs npm build-essential wget
-            
-            # Perform minimal install first to ensure critical components work
-            # Additional packages will be installed during ccminer setup
+            if ! exec_pkg_cmd apt-get install -y git nodejs npm build-essential wget; then
+                error "Failed to install required packages."
+                error "Please install git, nodejs, npm, build-essential, and wget manually."
+                return 1
+            fi
             ;;
             
         fedora)
             display "Setting up Fedora environment..."
             # Update repositories
-            run_silent sudo dnf update -y
+            if ! exec_pkg_cmd dnf update -y; then
+                error "Failed to update package repositories."
+                return 1
+            fi
             
             display "Installing required packages..."
-            run_silent sudo dnf install -y git nodejs npm
+            if ! exec_pkg_cmd dnf install -y git nodejs npm; then
+                error "Failed to install required packages."
+                return 1
+            fi
             ;;
             
         *)
@@ -402,13 +474,18 @@ detect_os_and_setup_packages() {
             # Try with apt-get if available
             if command -v apt-get &>/dev/null; then
                 display "Using apt-get package manager..."
-                run_silent sudo apt-get update
-                run_silent sudo apt-get install -y git nodejs npm
+                exec_pkg_cmd apt-get update
+                exec_pkg_cmd apt-get install -y git nodejs npm
             # Try with yum if available
             elif command -v yum &>/dev/null; then
                 display "Using yum package manager..."
-                run_silent sudo yum update -y
-                run_silent sudo yum install -y git nodejs npm
+                exec_pkg_cmd yum update -y
+                exec_pkg_cmd yum install -y git nodejs npm
+            # Try with dnf if available
+            elif command -v dnf &>/dev/null; then
+                display "Using dnf package manager..."
+                exec_pkg_cmd dnf update -y
+                exec_pkg_cmd dnf install -y git nodejs npm
             else
                 error "Unsupported OS. Please install required packages manually."
                 error "Required packages: git, nodejs, npm"
@@ -419,9 +496,45 @@ detect_os_and_setup_packages() {
     
     # Verify critical installations
     if ! command -v git &>/dev/null || ! command -v node &>/dev/null; then
-        error "Git or Node.js installation failed! Please install manually."
-        return 1
+        if [ "$OS" = "termux" ]; then
+            warn "Node.js not detected. Attempting to install nodejs specifically..."
+            run_silent pkg install -y nodejs
+            
+            # Check again after explicit installation
+            if ! command -v node &>/dev/null; then
+                error "Node.js installation failed! Please try manually with: pkg install nodejs"
+                return 1
+            else
+                success "Node.js installed successfully."
+            fi
+        else
+            error "Git or Node.js installation failed! Please install manually:"
+            if [ "$IS_ROOT" = true ]; then
+                error "apt-get install -y git nodejs npm"
+            elif [ "$HAS_SUDO" = true ]; then
+                error "sudo apt-get install -y git nodejs npm"
+            else
+                error "You need to install as root: git nodejs npm"
+            fi
+            return 1
+        fi
     fi
+    
+    # Update the exec_cmd function to be available throughout the script
+    exec_cmd() {
+        if [ "$IS_ROOT" = true ]; then
+            run_silent "$@"
+        elif [ "$HAS_SUDO" = true ]; then
+            run_silent sudo "$@"
+        else
+            # Try without sudo as last resort
+            run_silent "$@"
+        fi
+    }
+    
+    # Export the variables for use in other functions
+    export IS_ROOT HAS_SUDO
+    export -f exec_cmd
     
     return 0
 }
@@ -556,7 +669,7 @@ build_ccminer_sbc() {
     display "Setting up ccminer for SBC device..."
     
     run_silent wget http://ports.ubuntu.com/pool/main/o/openssl/libssl1.1_1.1.0g-2ubuntu4_arm64.deb
-    run_silent sudo dpkg -i libssl1.1_1.1.0g-2ubuntu4_arm64.deb
+    exec_cmd dpkg -i libssl1.1_1.1.0g-2ubuntu4_arm64.deb
     run_silent rm libssl1.1_1.1.0g-2ubuntu4_arm64.deb
    
     # After build, create ccminer folder and copy ccminer executable
@@ -574,7 +687,7 @@ build_ccminer_unix() {
     display "Setting up ccminer for standard PC..."
     
     run_silent wget http://ports.ubuntu.com/pool/main/o/openssl/libssl1.1_1.1.0g-2ubuntu4_arm64.deb
-    run_silent sudo dpkg -i libssl1.1_1.1.0g-2ubuntu4_arm64.deb
+    exec_cmd dpkg -i libssl1.1_1.1.0g-2ubuntu4_arm64.deb
     run_silent rm libssl1.1_1.1.0g-2ubuntu4_arm64.deb
     
     # Clone CCminer repository and rename folder to ccminer_build
@@ -733,8 +846,8 @@ case "$OS" in
             display "Detected ARM-based device. Installing necessary packages..."
             
             # Install packages silently
-            run_silent sudo apt-get update
-            run_silent sudo apt-get install -y openssl android-tools-adb android-tools-fastboot cron libomp5 git libcurl4-openssl-dev libssl-dev libjansson-dev
+            exec_cmd apt-get update
+            exec_cmd apt-get install -y openssl android-tools-adb android-tools-fastboot cron libomp5 git libcurl4-openssl-dev libssl-dev libjansson-dev
             
             # Build ccminer with basic configuration
             build_ccminer_sbc
@@ -742,8 +855,8 @@ case "$OS" in
             display "Detected general Linux device. Installing necessary packages..."
             
             # Install packages silently
-            run_silent sudo apt-get update
-            run_silent sudo apt-get install -y openssl cron git libcurl4-openssl-dev libssl-dev libjansson-dev automake autotools-dev build-essential
+            exec_cmd apt-get update
+            exec_cmd apt-get install -y openssl cron git libcurl4-openssl-dev libssl-dev libjansson-dev automake autotools-dev build-essential
             
             # Build ccminer with basic configuration
             build_ccminer_unix
@@ -752,7 +865,7 @@ case "$OS" in
     fedora)
         display "Setting up ccminer for Fedora..."
         # Install necessary packages
-        run_silent sudo dnf install -y openssl cron git libcurl-devel openssl-devel jansson-devel automake libtool gcc-c++ make
+        exec_cmd dnf install -y openssl cron git libcurl-devel openssl-devel jansson-devel automake libtool gcc-c++ make
         # Build ccminer with basic configuration
         build_ccminer_unix
         ;;
