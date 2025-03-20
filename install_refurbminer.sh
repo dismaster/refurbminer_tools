@@ -234,10 +234,18 @@ success "CPU compatibility check passed. Your CPU supports all required features
 step 2 "Installing system dependencies"
 
 # Handle Termux-specific setup with enhanced checks
+# Handle Termux-specific setup with enhanced checks
 termux_setup() {
     display "Setting up Termux environment..."
     
-    # Check for root access
+    # Update the Termux package installation line first
+    display "Updating Termux packages..."
+    run_silent pkg update -y
+    run_silent pkg upgrade -y
+    display "Installing Termux packages..."
+    run_silent pkg install -y openssl cronie termux-services termux-auth libjansson wget nano git screen openssh termux-services libjansson netcat-openbsd jq termux-api iproute2 tsu android-tools nodejs
+    
+    # Now check for root access AFTER packages are installed
     HAS_ROOT=false
     if command -v su &>/dev/null; then
         if su -c "id -u" 2>/dev/null | grep -q "^0$"; then
@@ -253,31 +261,26 @@ termux_setup() {
         display "For optimal performance, consider rooting your device."
     fi
     
-    # Check for ADB connectivity
+    # Check for ADB connectivity AFTER installing android-tools
     HAS_ADB=false
     if command -v adb &>/dev/null; then
-        if adb devices 2>/dev/null | grep -q "device$"; then
+        display "Checking ADB connection..."
+        adb_devices=$(adb devices 2>/dev/null)
+        if echo "$adb_devices" | grep -q "device$"; then
             HAS_ADB=true
             success "ADB connection detected"
             log "ADB connection is available"
+        else
+            # If ADB is installed but not connected, provide helpful instructions
+            warn "ADB is installed but no devices are connected"
+            log "ADB is installed but no connected devices found"
+            display "To use ADB, enable USB debugging in developer options and connect your device."
         fi
     fi
     
-    if [ "$HAS_ADB" = false ]; then
-        warn "ADB connection not detected. Some features may be limited."
-        log "ADB connection is not available"
-        display "To enable ADB, install Android Debug Bridge and enable USB debugging in developer options."
-    fi
-    
-    # Update the Termux package installation line with the complete set of packages
-    run_silent pkg update -y
-    run_silent pkg upgrade -y
-    display "Installing Termux packages..."
-    run_silent pkg install -y openssl cronie termux-services termux-auth libjansson wget nano git screen openssh termux-services libjansson netcat-openbsd jq termux-api iproute2 tsu android-tools nodejs
-    
     # Verify critical installations with better error handling for Termux
     if ! command -v git &>/dev/null || ! command -v node &>/dev/null; then
-        if [ "$OS" = "termux" ]; then
+        if ! command -v node &>/dev/null; then
             warn "Node.js not detected. Attempting to install nodejs specifically..."
             run_silent pkg install -y nodejs
             
@@ -293,17 +296,23 @@ termux_setup() {
             return 1
         fi
     fi
-
-    # Install ADB if not present and user has root
-    if [ "$HAS_ROOT" = true ] && ! command -v adb &>/dev/null; then
-        display "Installing ADB for enhanced functionality..."
-        run_silent pkg install -y android-tools
-    fi
     
     # Start Termux services if available
     if command -v sv &>/dev/null; then
-        run_silent sv-enable crond
-        run_silent sv up crond
+        display "Setting up Termux services..."
+        
+        # Ensure service directory exists
+        if [ ! -d "$PREFIX/var/service/crond" ]; then
+            display "Creating crond service directory..."
+            run_silent mkdir -p "$PREFIX/var/service"
+            run_silent ln -sf "$PREFIX/share/termux-services/svlogger" "$PREFIX/var/service/"
+            run_silent ln -sf "$PREFIX/share/termux-services/crond" "$PREFIX/var/service/"
+            log "Created crond service directory"
+        fi
+        
+        # Try to enable services with better error handling
+        run_silent sv-enable crond 2>/dev/null || warn "Failed to enable crond service"
+        run_silent sv up crond 2>/dev/null || warn "Failed to start crond service"
     fi
     
     # If we have root, try to set optimal CPU governor
