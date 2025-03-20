@@ -58,6 +58,31 @@ chmod +x install_refurbminer.sh
 
 During installation, you'll be asked to provide your RIG token. You can obtain this from the [RefurbMiner website](https://gui.refurbminer.de).
 
+#### Recommended Setup for Termux Users
+
+For a better installation experience on Termux, we recommend setting up SSH access before running the installer:
+
+```bash
+# Install SSH server
+pkg install openssh
+
+# Set password for SSH access
+passwd
+
+# Find your device's IP address
+ip address
+
+# Start the SSH server
+sshd
+```
+
+Now you can SSH into your device from a computer and run the installer remotely:
+
+```bash
+# From your computer
+ssh <username>@<device-ip> -p 8022
+```
+
 ### ![Upgrading from Old Version](images/banner_3.png)
 
 If you were using the previous version with CCminer and scripts like `monitor.sh`, `jobscheduler.sh`, etc., you should use the upgrade script to transition to the new RefurbMiner:
