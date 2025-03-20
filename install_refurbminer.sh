@@ -445,7 +445,7 @@ detect_os_and_setup_packages() {
             fi
             
             display "Installing common packages..."
-            if ! exec_pkg_cmd apt-get install -y git nodejs npm build-essential wget; then
+            if ! exec_pkg_cmd apt-get install -y screen git nodejs npm build-essential wget; then
                 error "Failed to install required packages."
                 error "Please install git, nodejs, npm, build-essential, and wget manually."
                 return 1
@@ -461,7 +461,7 @@ detect_os_and_setup_packages() {
             fi
             
             display "Installing required packages..."
-            if ! exec_pkg_cmd dnf install -y git nodejs npm; then
+            if ! exec_pkg_cmd dnf install -y screen git nodejs npm; then
                 error "Failed to install required packages."
                 return 1
             fi
@@ -475,20 +475,20 @@ detect_os_and_setup_packages() {
             if command -v apt-get &>/dev/null; then
                 display "Using apt-get package manager..."
                 exec_pkg_cmd apt-get update
-                exec_pkg_cmd apt-get install -y git nodejs npm
+                exec_pkg_cmd apt-get install -y screen git nodejs npm
             # Try with yum if available
             elif command -v yum &>/dev/null; then
                 display "Using yum package manager..."
                 exec_pkg_cmd yum update -y
-                exec_pkg_cmd yum install -y git nodejs npm
+                exec_pkg_cmd yum install -y screen git nodejs npm
             # Try with dnf if available
             elif command -v dnf &>/dev/null; then
                 display "Using dnf package manager..."
                 exec_pkg_cmd dnf update -y
-                exec_pkg_cmd dnf install -y git nodejs npm
+                exec_pkg_cmd dnf install -y screen git nodejs npm
             else
                 error "Unsupported OS. Please install required packages manually."
-                error "Required packages: git, nodejs, npm"
+                error "Required packages: screen, git, nodejs, npm"
                 return 1
             fi
             ;;
