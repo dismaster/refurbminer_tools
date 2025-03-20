@@ -545,6 +545,127 @@ if ! detect_os_and_setup_packages; then
     exit 1
 fi
 
+# Add this after the detect_os_and_setup_packages function
+
+check_and_update_nodejs() {
+    display "Checking Node.js version..."
+    
+    if ! command -v node &>/dev/null; then
+        warn "Node.js not found. Will attempt to install it."
+        return 1
+    fi
+    
+    # Get current Node.js version
+    NODE_VERSION=$(node -v | sed 's/v//')
+    log "Current Node.js version: $NODE_VERSION"
+    
+    # Parse major version number
+    NODE_MAJOR=$(echo "$NODE_VERSION" | cut -d. -f1)
+    
+    # Minimum recommended version is Node.js 16
+    MIN_VERSION=16
+    
+    # Check if version is sufficient
+    if [ "$NODE_MAJOR" -lt "$MIN_VERSION" ]; then
+        warn "Node.js version $NODE_VERSION is too old. RefurbMiner requires at least version $MIN_VERSION."
+        warn "Will attempt to install a newer version of Node.js."
+        
+        # Ask user if they want to update Node.js
+        echo -ne "${YELLOW}Do you want to install a newer version of Node.js? (y/n): ${NC}"
+        read -r UPDATE_NODE
+        
+        if [[ ! "$UPDATE_NODE" =~ ^[Yy]$ ]]; then
+            warn "Continuing with current Node.js version. Some features may not work correctly."
+            return 0
+        fi
+        
+        # Install NVM (Node Version Manager) for better version control
+        display "Installing NVM (Node Version Manager)..."
+        
+        # Create a temporary directory for NVM installation
+        NVM_TMP_DIR=$(mktemp -d)
+        log "Created temporary directory for NVM installation: $NVM_TMP_DIR"
+        
+        # Download and run NVM installer
+        run_silent curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh | bash
+        
+        # Source NVM
+        export NVM_DIR="$HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        
+        # Check if NVM is available
+        if ! command -v nvm &>/dev/null; then
+            warn "Failed to install NVM. Will try alternative Node.js upgrade method."
+            
+            # Alternative approach based on OS
+            case "$OS" in
+                debian|raspberrypi)
+                    display "Trying to update Node.js via package manager..."
+                    run_silent exec_cmd curl -fsSL https://deb.nodesource.com/setup_18.x | exec_cmd bash -
+                    run_silent exec_cmd apt-get install -y nodejs
+                    ;;
+                fedora)
+                    display "Trying to update Node.js via package manager..."
+                    run_silent exec_cmd dnf module install -y nodejs:18/common
+                    ;;
+                termux)
+                    display "Trying to update Node.js for Termux..."
+                    run_silent pkg install -y nodejs
+                    ;;
+                *)
+                    warn "Unable to update Node.js automatically on this system."
+                    display "Please manually install Node.js v$MIN_VERSION or higher from https://nodejs.org/"
+                    return 1
+                    ;;
+            esac
+        else
+            # Install the latest LTS version using NVM
+            display "Installing Node.js 18 (LTS) using NVM..."
+            run_silent nvm install 18
+            run_silent nvm use 18
+            run_silent nvm alias default 18
+            
+            # Update PATH to include the new Node.js version
+            export PATH="$NVM_DIR/versions/node/v18.*/bin:$PATH"
+        fi
+        
+        # Verify the new version
+        if command -v node &>/dev/null; then
+            NEW_VERSION=$(node -v | sed 's/v//')
+            log "Updated Node.js version: $NEW_VERSION"
+            
+            # Parse new major version number
+            NEW_MAJOR=$(echo "$NEW_VERSION" | cut -d. -f1)
+            
+            if [ "$NEW_MAJOR" -ge "$MIN_VERSION" ]; then
+                success "Successfully upgraded Node.js to version $NEW_VERSION"
+                
+                # Update npm to latest version
+                display "Updating npm to the latest version..."
+                run_silent npm install -g npm
+                
+                return 0
+            else
+                warn "Node.js upgrade partially successful, but version $NEW_VERSION is still below recommended $MIN_VERSION."
+                warn "Some features may not work correctly."
+                return 0
+            fi
+        else
+            error "Failed to upgrade Node.js. Please install version $MIN_VERSION or higher manually."
+            return 1
+        fi
+    else
+        success "Node.js version $NODE_VERSION is compatible with RefurbMiner."
+        return 0
+    fi
+}
+
+# Check and update Node.js if necessary
+if ! check_and_update_nodejs; then
+    warn "Node.js version check or update failed. Continuing anyway, but you may encounter issues."
+    # We don't exit here, give it a chance to work with current version
+fi
+
 success "System dependencies successfully installed"
 
 # === Step 3: Get RIG Token from User ===
