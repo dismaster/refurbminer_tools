@@ -1052,29 +1052,7 @@ fi
 
 # Clean up any stale screen sessions
 screen -wipe
-
-# Set CPU governor to performance if available
-if su -c "id -u" 2>/dev/null | grep -q "^0$"; then
-    # Find all CPU governor files
-    CPU_GOVS=\$(su -c "find /sys/devices/system/cpu/ -name scaling_governor")
-    # Set to performance or schedutil if available
-    for gov in \$CPU_GOVS; do
-        GOVERNORS=\$(su -c "cat \${gov%/*}/scaling_available_governors")
-        if echo "\$GOVERNORS" | grep -q "performance"; then
-            su -c "echo performance > \$gov" 2>/dev/null || true
-        elif echo "\$GOVERNORS" | grep -q "schedutil"; then
-            su -c "echo schedutil > \$gov" 2>/dev/null || true
-        fi
-    done
-    
-    # Disable thermal throttling if possible
-    if [ -f "/sys/class/thermal/thermal_zone0/mode" ]; then
-        su -c "echo disabled > /sys/class/thermal/thermal_zone0/mode" 2>/dev/null || true
-    fi
-    
-    # Set process priority
-    su -c "echo -17 > /proc/self/oom_adj" 2>/dev/null || true
-fi
+rm ~/.screen/*
 
 # Apply ADB optimizations if available
 if command -v adb &>/dev/null; then
@@ -1098,17 +1076,11 @@ cd $INSTALL_DIR && screen -dmS refurbminer npm start
 
 # Flash LED 3 times to indicate successful startup
 if command -v termux-torch &>/dev/null; then
-    sleep 2
     termux-torch on
-    sleep 0.5
     termux-torch off
-    sleep 0.5
     termux-torch on
-    sleep 0.5
     termux-torch off
-    sleep 0.5
     termux-torch on
-    sleep 0.5
     termux-torch off
 fi
 
