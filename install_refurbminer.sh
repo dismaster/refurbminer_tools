@@ -5,6 +5,51 @@ REPO_URL="https://github.com/dismaster/refurbminer"
 INSTALL_DIR="$HOME/refurbminer"
 LOG_FILE="$HOME/refurbminer_install.log"
 
+# === Command Line Arguments ===
+RIG_TOKEN=""
+SHOW_HELP=false
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -token=*)
+            RIG_TOKEN="${1#*=}"
+            shift
+            ;;
+        --token=*)
+            RIG_TOKEN="${1#*=}"
+            shift
+            ;;
+        -h|--help)
+            SHOW_HELP=true
+            shift
+            ;;
+        *)
+            echo "Unknown option $1"
+            SHOW_HELP=true
+            shift
+            ;;
+    esac
+done
+
+# Show help if requested or invalid arguments
+if [ "$SHOW_HELP" = true ]; then
+    echo "RefurbMiner Installation Script"
+    echo
+    echo "Usage: $0 [OPTIONS]"
+    echo
+    echo "Options:"
+    echo "  -token=TOKEN     Set RIG token (e.g., -token=xyz9876543210abcdef34)"
+    echo "  --token=TOKEN    Set RIG token (alternative format)"
+    echo "  -h, --help       Show this help message"
+    echo
+    echo "Examples:"
+    echo "  $0                                    # Interactive installation"
+    echo "  $0 -token=xyz9876543210abcdef34       # Automated installation with token"
+    echo
+    exit 0
+fi
+
 # === Color definitions ===
 BLUE='\033[0;34m'
 GREEN='\033[0;32m'
@@ -680,8 +725,14 @@ success "System dependencies successfully installed"
 # === Step 3: Get RIG Token from User ===
 step 3 "Setting up RIG Token"
 
-echo -ne "${YELLOW}Please enter your RIG Token (e.g., xyz9876543210abcdef34): ${NC}"
-read -r RIG_TOKEN
+# Check if token was provided via command line
+if [ -n "$RIG_TOKEN" ]; then
+    display "Using RIG Token from command line: $RIG_TOKEN"
+    log "RIG Token provided via command line: $RIG_TOKEN"
+else
+    echo -ne "${YELLOW}Please enter your RIG Token (e.g., xyz9876543210abcdef34): ${NC}"
+    read -r RIG_TOKEN
+fi
 
 if [ -z "$RIG_TOKEN" ]; then
     error "RIG Token cannot be empty. Exiting."
