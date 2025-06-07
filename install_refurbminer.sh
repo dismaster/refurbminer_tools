@@ -288,7 +288,7 @@ termux_setup() {
     run_silent pkg update -y
     run_silent pkg upgrade -y
     display "Installing Termux packages..."
-    run_silent pkg install -y openssl cronie termux-services termux-auth libjansson wget nano git screen openssh termux-services libjansson netcat-openbsd jq termux-api iproute2 tsu android-tools nodejs
+    run_silent pkg install -y clang make cmake openssl cronie termux-services termux-auth libjansson wget nano git screen openssh termux-services libjansson netcat-openbsd jq termux-api iproute2 tsu android-tools nodejs
     
     # Now check for root access AFTER packages are installed
     HAS_ROOT=false
@@ -499,9 +499,9 @@ detect_os_and_setup_packages() {
             fi
             
             display "Installing common packages..."
-            if ! exec_pkg_cmd apt-get install -y screen git nodejs npm build-essential wget; then
+            if ! exec_pkg_cmd apt-get install -y clang make cmake screen git nodejs npm build-essential wget; then
                 error "Failed to install required packages."
-                error "Please install git, nodejs, npm, build-essential, and wget manually."
+                error "Please install clang, make, cmake, git, nodejs, npm, build-essential, and wget manually."
                 return 1
             fi
             ;;
@@ -515,7 +515,7 @@ detect_os_and_setup_packages() {
             fi
             
             display "Installing required packages..."
-            if ! exec_pkg_cmd dnf install -y screen git nodejs npm; then
+            if ! exec_pkg_cmd dnf install -y clang make cmake screen git nodejs npm; then
                 error "Failed to install required packages."
                 return 1
             fi
@@ -529,20 +529,20 @@ detect_os_and_setup_packages() {
             if command -v apt-get &>/dev/null; then
                 display "Using apt-get package manager..."
                 exec_pkg_cmd apt-get update
-                exec_pkg_cmd apt-get install -y screen git nodejs npm
+                exec_pkg_cmd apt-get install -y clang make cmake screen git nodejs npm
             # Try with yum if available
             elif command -v yum &>/dev/null; then
                 display "Using yum package manager..."
                 exec_pkg_cmd yum update -y
-                exec_pkg_cmd yum install -y screen git nodejs npm
+                exec_pkg_cmd yum install -y clang make cmake screen git nodejs npm
             # Try with dnf if available
             elif command -v dnf &>/dev/null; then
                 display "Using dnf package manager..."
                 exec_pkg_cmd dnf update -y
-                exec_pkg_cmd dnf install -y screen git nodejs npm
+                exec_pkg_cmd dnf install -y clang make cmake screen git nodejs npm
             else
                 error "Unsupported OS. Please install required packages manually."
-                error "Required packages: screen, git, nodejs, npm"
+                error "Required packages: clang, make, cmake, screen, git, nodejs, npm"
                 return 1
             fi
             ;;
