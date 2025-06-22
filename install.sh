@@ -8,6 +8,7 @@ LOG_FILE="$HOME/refurbminer_install.log"
 # === Command Line Arguments ===
 RIG_TOKEN=""
 SHOW_HELP=false
+BYPASS_CPU_CHECK=false
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -42,6 +43,10 @@ while [[ $# -gt 0 ]]; do
                 shift
             fi
             ;;
+        --bypass-cpu-check)
+            BYPASS_CPU_CHECK=true
+            shift
+            ;;
         -h|--help)
             SHOW_HELP=true
             shift
@@ -63,6 +68,7 @@ if [ "$SHOW_HELP" = true ]; then
     echo "Options:"
     echo "  -token=TOKEN     Set RIG token (e.g., -token=xyz9876543210abcdef34)"
     echo "  --token=TOKEN    Set RIG token (alternative format)"
+    echo "  --bypass-cpu-check   Skip CPU compatibility check (for testing)"
     echo "  -h, --help       Show this help message"
     echo
     echo "Examples:"
@@ -216,6 +222,13 @@ fi
 step 1 "Checking CPU compatibility"
 
 check_cpu_compatibility() {
+    # Check if CPU check should be bypassed
+    if [ "$BYPASS_CPU_CHECK" = true ]; then
+        warn "CPU compatibility check bypassed by user"
+        log "CPU compatibility check was bypassed"
+        return 0
+    fi
+    
     # Check if lscpu is available
     if ! command -v lscpu &>/dev/null; then
         display "Installing required utilities..."
@@ -293,6 +306,7 @@ check_cpu_compatibility() {
         fi
         
         error "Could not determine CPU capabilities. Please ensure your system supports AES and PCLMUL instructions."
+        error "You can bypass this check with --bypass-cpu-check flag if you're sure your CPU is compatible."
         return 1
     fi
     
@@ -318,16 +332,22 @@ check_cpu_compatibility() {
         log "PCLMULQDQ instruction set detected"
     fi
     
+    # Debug output
+    log "Final check - AES: $HAS_AES, PMULL: $HAS_PMULL"
+    display "Debug: AES support = $HAS_AES, PCLMUL support = $HAS_PMULL"
+    
     # Final validation
-    if [ "$HAS_AES" = false ]; then
+    if [ "$HAS_AES" = "false" ]; then
         error "Your CPU does not support the AES instruction set which is required for mining."
         error "CPU flags found: $CPU_FLAGS"
+        error "You can bypass this check with --bypass-cpu-check flag if you're sure your CPU is compatible."
         return 1
     fi
     
-    if [ "$HAS_PMULL" = false ]; then
+    if [ "$HAS_PMULL" = "false" ]; then
         error "Your CPU does not support the PMULL/PCLMUL instruction set which is required for mining."
         error "CPU flags found: $CPU_FLAGS"
+        error "You can bypass this check with --bypass-cpu-check flag if you're sure your CPU is compatible."
         return 1
     fi
     
