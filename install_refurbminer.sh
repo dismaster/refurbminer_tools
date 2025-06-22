@@ -8,6 +8,7 @@ LOG_FILE="$HOME/refurbminer_install.log"
 # === Command Line Arguments ===
 RIG_TOKEN=""
 SHOW_HELP=false
+BYPASS_CPU_CHECK=false
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -18,6 +19,32 @@ while [[ $# -gt 0 ]]; do
             ;;
         --token=*)
             RIG_TOKEN="${1#*=}"
+            shift
+            ;;
+        -token)
+            # Handle -token VALUE format (separate argument)
+            if [[ -n "$2" && "$2" != -* ]]; then
+                RIG_TOKEN="$2"
+                shift 2
+            else
+                echo "Error: -token requires a value"
+                SHOW_HELP=true
+                shift
+            fi
+            ;;
+        --token)
+            # Handle --token VALUE format (separate argument)
+            if [[ -n "$2" && "$2" != -* ]]; then
+                RIG_TOKEN="$2"
+                shift 2
+            else
+                echo "Error: --token requires a value"
+                SHOW_HELP=true
+                shift
+            fi
+            ;;
+        --bypass-cpu-check)
+            BYPASS_CPU_CHECK=true
             shift
             ;;
         -h|--help)
@@ -41,6 +68,7 @@ if [ "$SHOW_HELP" = true ]; then
     echo "Options:"
     echo "  -token=TOKEN     Set RIG token (e.g., -token=xyz9876543210abcdef34)"
     echo "  --token=TOKEN    Set RIG token (alternative format)"
+    echo "  --bypass-cpu-check   Skip CPU compatibility check (for testing)"
     echo "  -h, --help       Show this help message"
     echo
     echo "Examples:"
@@ -194,6 +222,13 @@ fi
 step 1 "Checking CPU compatibility"
 
 check_cpu_compatibility() {
+    # Check if CPU check should be bypassed
+    if [ "$BYPASS_CPU_CHECK" = true ]; then
+        warn "CPU compatibility check bypassed by user"
+        log "CPU compatibility check was bypassed"
+        return 0
+    fi
+    
     # Check if lscpu is available
     if ! command -v lscpu &>/dev/null; then
         display "Installing required utilities..."
@@ -219,50 +254,105 @@ check_cpu_compatibility() {
         return 1
     fi
     
-    # Check for 64-bit support
-    if ! echo "$CPU_INFO" | grep -q "64-bit"; then
-        error "Your CPU does not support 64-bit operations which is required for mining."
-        return 1
-    fi
-    
-    # Get CPU flags - try different approaches to be comprehensive
-    CPU_FLAGS=""
-    
-    # Method 1: Try lscpu output directly for flags
-    if echo "$CPU_INFO" | grep -q "Flags:"; then
-        CPU_FLAGS=$(echo "$CPU_INFO" | grep "Flags:" | sed 's/Flags://g' | xargs)
-        log "Found flags in lscpu output"
-    # Method 2: Try lscpu -J for JSON output
-    elif lscpu -J 2>/dev/null | grep -q "flags"; then
-        CPU_FLAGS=$(lscpu -J 2>/dev/null | grep "flags" | sed 's/.*"data"://g' | tr -d '",')
-        log "Found flags in lscpu -J output"
-    # Method 3: Check /proc/cpuinfo
-    elif grep -q "flags" /proc/cpuinfo 2>/dev/null; then
-        CPU_FLAGS=$(grep "flags" /proc/cpuinfo | head -1 | sed 's/.*: //g')
-        log "Found flags in /proc/cpuinfo"
-    # Method 4: Check Features in ARM cpuinfo
-    elif grep -q "Features" /proc/cpuinfo 2>/dev/null; then
-        CPU_FLAGS=$(grep "Features" /proc/cpuinfo | head -1 | sed 's/.*: //g')
-        log "Found features in /proc/cpuinfo (ARM format)"
-    fi
-    
-    log "CPU flags: $CPU_FLAGS"
-    
-    # Check for essential CPU features (aes and pmull)
-    if ! echo "$CPU_FLAGS" | grep -qi "aes"; then
-        error "Your CPU does not support the AES instruction set which is required for mining."
-        return 1
-    fi
-    
-    if ! echo "$CPU_FLAGS" | grep -qi "pmull"; then
-        # For x86_64 architectures, pmull might be called pclmul or pclmulqdq
-        if ! echo "$CPU_FLAGS" | grep -qi "pclmul"; then
-            error "Your CPU does not support the PMULL/PCLMUL instruction set which is required for mining."
+    # Check for 64-bit support - improved detection
+    ARCH=$(uname -m)
+    if [[ "$ARCH" != "x86_64" ]] && [[ "$ARCH" != "aarch64" ]] && [[ "$ARCH" != "arm64" ]]; then
+        if ! echo "$CPU_INFO" | grep -q "64-bit"; then
+            error "Your CPU does not support 64-bit operations which is required for mining."
             return 1
         fi
     fi
     
+    # Get CPU flags - improved method with better fallbacks
+    CPU_FLAGS=""
+    
+    # Method 1: Try /proc/cpuinfo first (most reliable)
+    if [ -f "/proc/cpuinfo" ]; then
+        if grep -q "flags" /proc/cpuinfo 2>/dev/null; then
+            CPU_FLAGS=$(grep "flags" /proc/cpuinfo | head -1 | sed 's/.*: //g')
+            log "Found flags in /proc/cpuinfo"
+        elif grep -q "Features" /proc/cpuinfo 2>/dev/null; then
+            CPU_FLAGS=$(grep "Features" /proc/cpuinfo | head -1 | sed 's/.*: //g')
+            log "Found features in /proc/cpuinfo (ARM format)"
+        fi
+    fi
+    
+    # Method 2: Try lscpu output if /proc/cpuinfo didn't work
+    if [ -z "$CPU_FLAGS" ]; then
+        if echo "$CPU_INFO" | grep -q "Flags:"; then
+            CPU_FLAGS=$(echo "$CPU_INFO" | grep "Flags:" | sed 's/Flags://g' | xargs)
+            log "Found flags in lscpu output"
+        fi
+    fi
+    
+    # Method 3: Try lscpu -J for JSON output
+    if [ -z "$CPU_FLAGS" ] && command -v jq &>/dev/null; then
+        if lscpu -J 2>/dev/null | jq -r '.lscpu[] | select(.field=="Flags:") | .data' 2>/dev/null; then
+            CPU_FLAGS=$(lscpu -J 2>/dev/null | jq -r '.lscpu[] | select(.field=="Flags:") | .data' 2>/dev/null)
+            log "Found flags in lscpu -J output"
+        fi
+    fi
+    
+    log "CPU flags: $CPU_FLAGS"
+    
+    # If we still don't have flags, try a different approach
+    if [ -z "$CPU_FLAGS" ]; then
+        warn "Could not retrieve CPU flags using standard methods. Checking architecture compatibility..."
+        
+        # For x86_64, assume modern CPU with required features
+        if [[ "$ARCH" == "x86_64" ]]; then
+            success "x86_64 architecture detected - assuming modern CPU with required features"
+            return 0
+        fi
+        
+        error "Could not determine CPU capabilities. Please ensure your system supports AES and PCLMUL instructions."
+        error "You can bypass this check with --bypass-cpu-check flag if you're sure your CPU is compatible."
+        return 1
+    fi
+    
+    # Check for essential CPU features (aes and pmull/pclmul)
+    HAS_AES=false
+    HAS_PMULL=false
+    
+    # Check for AES support (case insensitive)
+    if echo "$CPU_FLAGS" | grep -qi "aes"; then
+        HAS_AES=true
+        log "AES instruction set detected"
+    fi
+    
+    # Check for PMULL/PCLMUL support (case insensitive)
+    if echo "$CPU_FLAGS" | grep -qi "pmull"; then
+        HAS_PMULL=true
+        log "PMULL instruction set detected"
+    elif echo "$CPU_FLAGS" | grep -qi "pclmul"; then
+        HAS_PMULL=true
+        log "PCLMUL instruction set detected"
+    elif echo "$CPU_FLAGS" | grep -qi "pclmulqdq"; then
+        HAS_PMULL=true
+        log "PCLMULQDQ instruction set detected"
+    fi
+    
+    # Debug output
+    log "Final check - AES: $HAS_AES, PMULL: $HAS_PMULL"
+    display "Debug: AES support = $HAS_AES, PCLMUL support = $HAS_PMULL"
+    
+    # Final validation
+    if [ "$HAS_AES" = "false" ]; then
+        error "Your CPU does not support the AES instruction set which is required for mining."
+        error "CPU flags found: $CPU_FLAGS"
+        error "You can bypass this check with --bypass-cpu-check flag if you're sure your CPU is compatible."
+        return 1
+    fi
+    
+    if [ "$HAS_PMULL" = "false" ]; then
+        error "Your CPU does not support the PMULL/PCLMUL instruction set which is required for mining."
+        error "CPU flags found: $CPU_FLAGS"
+        error "You can bypass this check with --bypass-cpu-check flag if you're sure your CPU is compatible."
+        return 1
+    fi
+    
     success "CPU compatibility verified successfully"
+    log "AES support: $HAS_AES, PMULL/PCLMUL support: $HAS_PMULL"
     return 0
 }
 
@@ -386,20 +476,39 @@ detect_os_and_setup_packages() {
     display "Detecting operating system..."
     
     OS="unknown"
+    OS_NAME="unknown"
     if grep -qEi "termux" <<< "$PREFIX"; then
         OS="termux"
+        OS_NAME="Termux"
     elif [ -f "/etc/os-release" ]; then
         . /etc/os-release
         case "$ID" in
-            ubuntu|debian) OS="debian";;
-            fedora) OS="fedora";;
-            raspbian) OS="raspberrypi";;
-            *) OS="other-linux";;
+            ubuntu) 
+                OS="debian" 
+                OS_NAME="Ubuntu (Debian-based)"
+                ;;
+            debian) 
+                OS="debian"
+                OS_NAME="Debian"
+                ;;
+            fedora) 
+                OS="fedora"
+                OS_NAME="Fedora"
+                ;;
+            raspbian) 
+                OS="raspberrypi"
+                OS_NAME="Raspberry Pi OS"
+                ;;
+            *) 
+                OS="other-linux"
+                OS_NAME="$PRETTY_NAME (Generic Linux)"
+                ;;
         esac
     fi
     export OS
     
-    display "Detected OS: $OS"
+    display "Detected OS: $OS_NAME"
+    log "OS detection: ID=$ID, OS=$OS, NAME=$OS_NAME"
     
     # Determine if sudo is available and if user has direct root privileges
     HAS_SUDO=false
@@ -490,7 +599,7 @@ detect_os_and_setup_packages() {
             ;;
             
         debian|raspberrypi)
-            display "Setting up Debian/Raspberry Pi environment..."
+            display "Setting up $OS_NAME environment..."
             # Update repositories
             if ! exec_pkg_cmd apt-get update; then
                 error "Failed to update package repositories. Check your network connection."
@@ -1024,7 +1133,7 @@ case "$OS" in
     debian|raspberrypi)
         # Check if the system is an SBC (e.g., Raspberry Pi, Orange Pi) or ARM-based
         if grep -q "Raspberry" /proc/device-tree/model 2>/dev/null || grep -q "Orange" /proc/device-tree/model 2>/dev/null || grep -q "Rockchip" /proc/device-tree/model 2>/dev/null || lscpu | grep -q "ARM"; then
-            display "Detected ARM-based device. Installing necessary packages..."
+            display "Detected ARM-based device ($OS_NAME). Installing necessary packages..."
             
             # Install packages silently
             exec_cmd apt-get update
@@ -1033,7 +1142,7 @@ case "$OS" in
             # Build ccminer with basic configuration
             build_ccminer_sbc
         else
-            display "Detected general Linux device. Installing necessary packages..."
+            display "Detected x86_64 Linux device ($OS_NAME). Installing necessary packages..."
             
             # Install packages silently
             exec_cmd apt-get update
@@ -1064,6 +1173,67 @@ step 6 "Finalizing installation"
 display "Checking system configuration..."
 # Set executable permissions for ccminer
 run_silent chmod +x "$INSTALL_DIR/apps/ccminer/ccminer"
+
+# Download utility scripts first before trying to make them executable
+display "Downloading utility scripts..."
+run_silent wget -q -O "$INSTALL_DIR/start.sh" "https://raw.githubusercontent.com/dismaster/refurbminer/master/scripts/start.sh"
+run_silent wget -q -O "$INSTALL_DIR/stop.sh" "https://raw.githubusercontent.com/dismaster/refurbminer/master/scripts/stop.sh"
+run_silent wget -q -O "$INSTALL_DIR/status.sh" "https://raw.githubusercontent.com/dismaster/refurbminer/master/scripts/status.sh"
+
+# Make all scripts executable (only once)
+run_silent chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/status.sh"
+
+# Verify scripts were downloaded successfully
+if [ -f "$INSTALL_DIR/start.sh" ] && [ -f "$INSTALL_DIR/stop.sh" ] && [ -f "$INSTALL_DIR/status.sh" ]; then
+    success "Utility scripts installed successfully"
+    log "Utility scripts installed in $INSTALL_DIR"
+else
+    warn "Failed to download one or more utility scripts"
+    log "Issues downloading utility scripts from repository"
+    
+    # Create basic fallback scripts if download fails
+    display "Creating basic fallback scripts..."
+    
+    cat > "$INSTALL_DIR/start.sh" << 'EOF'
+#!/bin/bash
+cd "$(dirname "$0")"
+screen -dmS refurbminer npm start
+echo "RefurbMiner started in background"
+EOF
+
+    cat > "$INSTALL_DIR/stop.sh" << 'EOF'
+#!/bin/bash
+screen -S refurbminer -X quit
+echo "RefurbMiner stopped"
+EOF
+
+    cat > "$INSTALL_DIR/status.sh" << 'EOF'
+#!/bin/bash
+if screen -ls | grep -q "refurbminer"; then
+    echo "RefurbMiner is running"
+    exit 0
+else
+    echo "RefurbMiner is not running"
+    exit 1
+fi
+EOF
+
+    run_silent chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/status.sh"
+    success "Created fallback utility scripts"
+fi
+
+# Download update script to the user's home directory
+display "Setting up automatic updater..."
+run_silent wget -q -O "$HOME/update_refurbminer.sh" "https://raw.githubusercontent.com/dismaster/refurbminer_tools/refs/heads/main/update_refurbminer.sh"
+run_silent chmod +x "$HOME/update_refurbminer.sh"
+
+if [ -f "$HOME/update_refurbminer.sh" ] && [ -x "$HOME/update_refurbminer.sh" ]; then
+    success "Auto-updater script installed successfully"
+    log "Update script installed at $HOME/update_refurbminer.sh"
+else
+    warn "Failed to install auto-updater script"
+    log "Failed to install update script at $HOME/update_refurbminer.sh"
+fi
 
 # Setup autostart based on detected environment
 display "Setting up auto-start capability..."
@@ -1103,7 +1273,7 @@ fi
 
 # Clean up any stale screen sessions
 screen -wipe
-rm ~/.screen/*
+rm ~/.screen/* 2>/dev/null || true
 
 # Apply ADB optimizations if available
 if command -v adb &>/dev/null; then
@@ -1128,10 +1298,15 @@ cd $INSTALL_DIR && screen -dmS refurbminer npm start
 # Flash LED 3 times to indicate successful startup
 if command -v termux-torch &>/dev/null; then
     termux-torch on
+    sleep 0.5
     termux-torch off
+    sleep 0.5
     termux-torch on
+    sleep 0.5
     termux-torch off
+    sleep 0.5
     termux-torch on
+    sleep 0.5
     termux-torch off
 fi
 
@@ -1172,10 +1347,15 @@ cd $INSTALL_DIR && screen -dmS refurbminer npm start
 # Flash LED 3 times to indicate successful startup
 if command -v termux-torch &>/dev/null; then
     termux-torch on
+    sleep 0.5
     termux-torch off
+    sleep 0.5
     termux-torch on
+    sleep 0.5
     termux-torch off
+    sleep 0.5
     termux-torch on
+    sleep 0.5
     termux-torch off
 fi
 
@@ -1243,37 +1423,6 @@ EOF
         rm -f "$TEMP_CRON"
         ;;
 esac
-
-# Create convenient start/stop scripts
-display "Creating utility scripts..."
-
-# Make all scripts executable
-run_silent chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/status.sh"
-
-# Verify scripts were downloaded successfully
-if [ -f "$INSTALL_DIR/start.sh" ] && [ -f "$INSTALL_DIR/stop.sh" ] && [ -f "$INSTALL_DIR/status.sh" ]; then
-    success "Utility scripts installed successfully"
-    log "Utility scripts installed in $INSTALL_DIR"
-else
-    warn "Failed to download one or more utility scripts"
-    log "Issues downloading utility scripts from repository"
-fi
-
-# Download update script to the user's home directory, not the app folder
-display "Setting up automatic updater..."
-run_silent wget -q -O "$HOME/update_refurbminer.sh" "https://raw.githubusercontent.com/dismaster/refurbminer_tools/refs/heads/main/update_refurbminer.sh"
-run_silent chmod +x "$HOME/update_refurbminer.sh"
-
-if [ -f "$HOME/update_refurbminer.sh" ] && [ -x "$HOME/update_refurbminer.sh" ]; then
-    success "Auto-updater script installed successfully"
-    log "Update script installed at $HOME/update_refurbminer.sh"
-else
-    warn "Failed to install auto-updater script"
-    log "Failed to install update script at $HOME/update_refurbminer.sh"
-fi
-
-# Make all scripts executable
-run_silent chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/status.sh"
 
 # === Finished ===
 success "RefurbMiner installation complete!"
