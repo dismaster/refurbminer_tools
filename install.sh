@@ -476,20 +476,39 @@ detect_os_and_setup_packages() {
     display "Detecting operating system..."
     
     OS="unknown"
+    OS_NAME="unknown"
     if grep -qEi "termux" <<< "$PREFIX"; then
         OS="termux"
+        OS_NAME="Termux"
     elif [ -f "/etc/os-release" ]; then
         . /etc/os-release
         case "$ID" in
-            ubuntu|debian) OS="debian";;
-            fedora) OS="fedora";;
-            raspbian) OS="raspberrypi";;
-            *) OS="other-linux";;
+            ubuntu) 
+                OS="debian" 
+                OS_NAME="Ubuntu (Debian-based)"
+                ;;
+            debian) 
+                OS="debian"
+                OS_NAME="Debian"
+                ;;
+            fedora) 
+                OS="fedora"
+                OS_NAME="Fedora"
+                ;;
+            raspbian) 
+                OS="raspberrypi"
+                OS_NAME="Raspberry Pi OS"
+                ;;
+            *) 
+                OS="other-linux"
+                OS_NAME="$PRETTY_NAME (Generic Linux)"
+                ;;
         esac
     fi
     export OS
     
-    display "Detected OS: $OS"
+    display "Detected OS: $OS_NAME"
+    log "OS detection: ID=$ID, OS=$OS, NAME=$OS_NAME"
     
     # Determine if sudo is available and if user has direct root privileges
     HAS_SUDO=false
@@ -580,7 +599,7 @@ detect_os_and_setup_packages() {
             ;;
             
         debian|raspberrypi)
-            display "Setting up Debian/Raspberry Pi environment..."
+            display "Setting up $OS_NAME environment..."
             # Update repositories
             if ! exec_pkg_cmd apt-get update; then
                 error "Failed to update package repositories. Check your network connection."
@@ -1114,7 +1133,7 @@ case "$OS" in
     debian|raspberrypi)
         # Check if the system is an SBC (e.g., Raspberry Pi, Orange Pi) or ARM-based
         if grep -q "Raspberry" /proc/device-tree/model 2>/dev/null || grep -q "Orange" /proc/device-tree/model 2>/dev/null || grep -q "Rockchip" /proc/device-tree/model 2>/dev/null || lscpu | grep -q "ARM"; then
-            display "Detected ARM-based device. Installing necessary packages..."
+            display "Detected ARM-based device ($OS_NAME). Installing necessary packages..."
             
             # Install packages silently
             exec_cmd apt-get update
@@ -1123,7 +1142,7 @@ case "$OS" in
             # Build ccminer with basic configuration
             build_ccminer_sbc
         else
-            display "Detected general Linux device. Installing necessary packages..."
+            display "Detected x86_64 Linux device ($OS_NAME). Installing necessary packages..."
             
             # Install packages silently
             exec_cmd apt-get update
