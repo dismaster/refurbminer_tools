@@ -5,6 +5,23 @@ REPO_URL="https://github.com/dismaster/refurbminer"
 INSTALL_DIR="$HOME/refurbminer"
 LOG_FILE="$HOME/refurbminer_install.log"
 
+# Exit handler for unexpected errors
+exit_handler() {
+    local exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        echo -e "\n\033[0;31m❌ Installation failed with exit code: $exit_code\033[0m"
+        echo -e "\033[0;33m⚠️ Check the log file for details: $LOG_FILE\033[0m"
+        echo -e "\033[0;36mCommon solutions:\033[0m"
+        echo -e "  - Run with sudo: sudo ./install_refurbminer.sh"
+        echo -e "  - Check network connectivity"
+        echo -e "  - Ensure you have sufficient disk space"
+        echo -e "  - Try bypassing CPU check: ./install_refurbminer.sh --bypass-cpu-check"
+    fi
+}
+
+# Set up exit trap
+trap exit_handler EXIT
+
 # === Command Line Arguments ===
 RIG_TOKEN=""
 SHOW_HELP=false
@@ -522,27 +539,44 @@ detect_os_and_setup_packages() {
         log "Running as non-root user"
         # Check if sudo is available
         if command -v sudo &>/dev/null; then
-            # Verify sudo works without asking for password
+            # Check if we have passwordless sudo
             if sudo -n true 2>/dev/null; then
                 HAS_SUDO=true
                 log "Sudo is available and configured for passwordless use"
             else
-                # Try with a fake command to see if sudo prompts for password or fails
-                sudo_output=$(sudo -l 2>&1)
-                if echo "$sudo_output" | grep -q "password"; then
-                    HAS_SUDO=true
-                    log "Sudo is available but requires password"
-                    display "Note: You may be prompted for your password during installation"
-                else
-                    log "Sudo is not available or user doesn't have sudo privileges"
-                    warn "No sudo privileges detected. Some features may not work properly."
-                fi
+                # Assume sudo might work but requires password - we'll test it when needed
+                HAS_SUDO=true
+                log "Sudo command found, assuming it will work with password if needed"
+                display "Note: You may be prompted for your password during installation"
             fi
         else
             log "Sudo command not found"
             warn "The 'sudo' command is not available on this system."
         fi
     fi
+    
+    # Function to test sudo privileges early
+    test_sudo_privileges() {
+        if [ "$HAS_SUDO" = true ] && [ "$IS_ROOT" = false ]; then
+            log "Testing sudo privileges..."
+            if ! sudo -n true 2>/dev/null; then
+                # Need password, let's test with a simple command
+                display "Testing sudo access (you may be prompted for your password)..."
+                if sudo true 2>/dev/null; then
+                    log "Sudo privileges confirmed"
+                    return 0
+                else
+                    error "Sudo test failed. Please check your sudo privileges."
+                    error "Make sure you're in the sudo group or have sudo access configured."
+                    return 1
+                fi
+            else
+                log "Passwordless sudo confirmed"
+                return 0
+            fi
+        fi
+        return 0
+    }
     
     # Function to execute commands with appropriate privilege level
     exec_pkg_cmd() {
@@ -551,11 +585,36 @@ detect_os_and_setup_packages() {
         if [ "$IS_ROOT" = true ]; then
             # Already root, execute directly
             log "Executing as root: ${cmd_args[*]}"
-            run_silent "${cmd_args[@]}"
+            if run_silent "${cmd_args[@]}"; then
+                return 0
+            else
+                error "Failed to execute: ${cmd_args[*]}"
+                return 1
+            fi
         elif [ "$HAS_SUDO" = true ]; then
             # Use sudo
             log "Executing with sudo: ${cmd_args[*]}"
-            run_silent sudo "${cmd_args[@]}"
+            if run_silent sudo "${cmd_args[@]}"; then
+                return 0
+            else
+                local exit_code=$?
+                error "Failed to execute with sudo: ${cmd_args[*]}"
+                if [ $exit_code -eq 1 ]; then
+                    error "Command failed. This might be due to:"
+                    error "- Network connectivity issues"
+                    error "- Package repository problems"
+                    error "- Missing dependencies"
+                elif [ $exit_code -eq 130 ]; then
+                    error "Command was interrupted (Ctrl+C pressed)"
+                else
+                    error "Sudo command failed with exit code: $exit_code"
+                    error "This might be due to:"
+                    error "- Incorrect password"
+                    error "- Insufficient sudo privileges"
+                    error "- System configuration issues"
+                fi
+                return $exit_code
+            fi
         else
             # No sudo, no root - try direct execution and hope it works
             # (useful for user-level package managers or containers)
@@ -588,6 +647,13 @@ detect_os_and_setup_packages() {
             IS_SBC=true
             log "SBC detected: $SBC_MODEL"
         fi
+    fi
+    
+    # Test sudo privileges early if needed
+    if ! test_sudo_privileges; then
+        error "Cannot proceed without proper privileges."
+        error "Please ensure you have sudo access or run this script as root."
+        return 1
     fi
     
     # Update system and install required packages
@@ -698,6 +764,16 @@ detect_os_and_setup_packages() {
     # Export the variables for use in other functions
     export IS_ROOT HAS_SUDO
     export -f exec_cmd
+    
+    # Log privilege summary
+    log "Privilege summary: IS_ROOT=$IS_ROOT, HAS_SUDO=$HAS_SUDO"
+    if [ "$IS_ROOT" = true ]; then
+        display "Running with root privileges"
+    elif [ "$HAS_SUDO" = true ]; then
+        display "Running with sudo privileges"
+    else
+        display "Running without elevated privileges"
+    fi
     
     return 0
 }
@@ -1444,3 +1520,18 @@ echo -e "${BLUE}You can also manually start it with:${NC} ${YELLOW}cd $INSTALL_D
 echo
 echo -e "${BLUE}Installation log saved to:${NC} $LOG_FILE"
 echo
+echo -e "${LC}Troubleshooting:${NC}"
+echo -e "  If you encounter permission errors:"
+echo -e "    - Make sure you're in the sudo group: ${YELLOW}groups \$USER${NC}"
+echo -e "    - Try running with sudo: ${YELLOW}sudo ./install_refurbminer.sh${NC}"
+echo -e "    - Or as root: ${YELLOW}su - && ./install_refurbminer.sh${NC}"
+echo -e "  If CPU compatibility check fails:"
+echo -e "    - Use bypass flag: ${YELLOW}./install_refurbminer.sh --bypass-cpu-check${NC}"
+echo -e "  For package installation issues:"
+echo -e "    - Update package lists: ${YELLOW}sudo apt update${NC}"
+echo -e "    - Check network connectivity"
+echo -e "  Check the log file for detailed error information: ${YELLOW}$LOG_FILE${NC}"
+echo
+
+# Disable exit handler since we completed successfully
+trap - EXIT
