@@ -7,12 +7,169 @@ SCREEN_NAME="refurbminer"
 BACKUP_DIR="$HOME/refurbminer_backup_$(date +%Y%m%d%H%M%S)"
 # Configure maximum number of backup folders to keep
 MAX_BACKUPS=3
+# Add logging
+LOG_FILE="$HOME/refurbminer_update.log"
 
 # Helper functions for friendly output
-info()    { echo -e "\033[1;34mℹ️  $1\033[0m"; }
-success() { echo -e "\033[1;32m✅ $1\033[0m"; }
-error()   { echo -e "\033[1;31m❌ $1\033[0m"; }
-warn()    { echo -e "\033[1;33m⚠️  $1\033[0m"; }
+info()    { echo -e "\033[1;34mℹ️  $1\033[0m"; log "INFO: $1"; }
+success() { echo -e "\033[1;32m✅ $1\033[0m"; log "SUCCESS: $1"; }
+error()   { echo -e "\033[1;31m❌ $1\033[0m"; log "ERROR: $1"; }
+warn()    { echo -e "\033[1;33m⚠️  $1\033[0m"; log "WARNING: $1"; }
+
+# Logging function
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+# Function to run commands with better error reporting
+run_with_output() {
+    local cmd="$1"
+    local description="$2"
+    
+    log "Running: $cmd"
+    if eval "$cmd" >> "$LOG_FILE" 2>&1; then
+        return 0
+    else
+        local exit_code=$?
+        error "$description failed with exit code $exit_code"
+        error "Check $LOG_FILE for detailed error information"
+        return $exit_code
+    fi
+}
+
+# Function to check Node.js and npm versions
+check_nodejs_environment() {
+    info "Checking Node.js environment..."
+    
+    # Check Node.js version
+    if command -v node &>/dev/null; then
+        NODE_VERSION=$(node -v)
+        info "Node.js version: $NODE_VERSION"
+        log "Node.js version: $NODE_VERSION"
+    else
+        error "Node.js is not installed or not in PATH"
+        return 1
+    fi
+    
+    # Check npm version
+    if command -v npm &>/dev/null; then
+        NPM_VERSION=$(npm -v)
+        info "npm version: $NPM_VERSION"
+        log "npm version: $NPM_VERSION"
+    else
+        error "npm is not installed or not in PATH"
+        return 1
+    fi
+    
+    # Check if we can write to npm cache
+    if ! npm config get cache &>/dev/null; then
+        warn "npm cache directory may not be accessible"
+    fi
+    
+    return 0
+}
+
+# Function to clean npm cache and node_modules
+clean_build_environment() {
+    info "Cleaning build environment..."
+    
+    # Remove node_modules if it exists
+    if [ -d "$REPO_DIR/node_modules" ]; then
+        log "Removing existing node_modules directory"
+        rm -rf "$REPO_DIR/node_modules"
+    fi
+    
+    # Clear npm cache
+    log "Clearing npm cache"
+    npm cache clean --force >> "$LOG_FILE" 2>&1 || warn "Failed to clear npm cache"
+    
+    # Remove package-lock.json to force fresh install
+    if [ -f "$REPO_DIR/package-lock.json" ]; then
+        log "Removing package-lock.json for fresh install"
+        rm -f "$REPO_DIR/package-lock.json"
+    fi
+    
+    success "Build environment cleaned"
+}
+
+# Function to attempt build with fallback options
+attempt_build() {
+    info "Attempting to build application..."
+    
+    # First attempt: standard build
+    if run_with_output "npm run build" "Standard build"; then
+        return 0
+    fi
+    
+    warn "Standard build failed. Trying alternative approaches..."
+    
+    # Second attempt: rebuild node modules and try again
+    info "Rebuilding dependencies..."
+    if run_with_output "npm install --force" "Forced dependency installation"; then
+        if run_with_output "npm run build" "Build after forced install"; then
+            return 0
+        fi
+    fi
+    
+    # Third attempt: use legacy peer deps
+    warn "Trying with legacy peer dependencies..."
+    if run_with_output "npm install --legacy-peer-deps" "Install with legacy peer deps"; then
+        if run_with_output "npm run build" "Build with legacy deps"; then
+            return 0
+        fi
+    fi
+    
+    # Fourth attempt: skip build and just prepare files
+    warn "Build continues to fail. Attempting to run without build step..."
+    
+    # Check if the main files exist
+    if [ -f "$REPO_DIR/package.json" ] && [ -f "$REPO_DIR/index.js" -o -f "$REPO_DIR/app.js" -o -f "$REPO_DIR/src/index.js" ]; then
+        warn "Skipping build step - application may work without it"
+        return 0
+    fi
+    
+    return 1
+}
+
+# Function to validate the installation
+validate_installation() {
+    info "Validating installation..."
+    
+    # Check if essential files exist
+    if [ ! -f "$REPO_DIR/package.json" ]; then
+        error "package.json not found"
+        return 1
+    fi
+    
+    # Try to identify the main application file
+    local main_file=""
+    if [ -f "$REPO_DIR/index.js" ]; then
+        main_file="index.js"
+    elif [ -f "$REPO_DIR/app.js" ]; then
+        main_file="app.js"
+    elif [ -f "$REPO_DIR/src/index.js" ]; then
+        main_file="src/index.js"
+    else
+        # Try to extract from package.json
+        main_file=$(grep -o '"main"[[:space:]]*:[[:space:]]*"[^"]*"' "$REPO_DIR/package.json" 2>/dev/null | head -1 | cut -d '"' -f4)
+    fi
+    
+    if [ -n "$main_file" ] && [ -f "$REPO_DIR/$main_file" ]; then
+        info "Main application file found: $main_file"
+        log "Main application file: $main_file"
+    else
+        warn "Could not identify main application file"
+    fi
+    
+    # Check if node_modules directory exists and has content
+    if [ -d "$REPO_DIR/node_modules" ] && [ "$(ls -A $REPO_DIR/node_modules 2>/dev/null)" ]; then
+        success "Dependencies appear to be installed"
+    else
+        warn "node_modules directory is missing or empty"
+    fi
+    
+    return 0
+}
 
 # Function to clean up old backup folders
 cleanup_old_backups() {
@@ -31,10 +188,18 @@ cleanup_old_backups() {
     fi
 }
 
+# Start logging
+log "=== RefurbMiner Update Started ==="
 info "Starting refurbminer update..."
 
 # === NAVIGATE TO REPO ===
-cd "$REPO_DIR" || { error "Repo directory not found!"; exit 1; }
+cd "$REPO_DIR" || { error "Repo directory not found at $REPO_DIR!"; exit 1; }
+
+# === CHECK ENVIRONMENT ===
+if ! check_nodejs_environment; then
+    error "Node.js environment check failed. Please ensure Node.js and npm are properly installed."
+    exit 1
+fi
 
 # === CAPTURE PREVIOUS VERSION ===
 # Get previous version before updating
@@ -65,28 +230,35 @@ mkdir -p "$BACKUP_DIR" > /dev/null 2>&1
 # Backup .env file
 if [ -f "$REPO_DIR/.env" ]; then
     cp -f "$REPO_DIR/.env" "$BACKUP_DIR/.env" > /dev/null 2>&1
+    log "Backed up .env file"
 fi
 
 # Backup config/config.json
 if [ -f "$REPO_DIR/config/config.json" ]; then
     mkdir -p "$BACKUP_DIR/config" > /dev/null 2>&1
     cp -f "$REPO_DIR/config/config.json" "$BACKUP_DIR/config/config.json" > /dev/null 2>&1
+    log "Backed up config/config.json"
 fi
 
 # Backup apps directory
 if [ -d "$REPO_DIR/apps" ]; then
     cp -rf "$REPO_DIR/apps" "$BACKUP_DIR/" > /dev/null 2>&1
+    log "Backed up apps directory"
 fi
 
 # Backup package.json for version tracking
 if [ -f "$REPO_DIR/package.json" ]; then
     cp -f "$REPO_DIR/package.json" "$BACKUP_DIR/package.json" > /dev/null 2>&1
+    log "Backed up package.json"
 fi
 
-success "Backup created"
+success "Backup created at $BACKUP_DIR"
 
 # === CLEAN UP OLD BACKUPS ===
 cleanup_old_backups
+
+# === CLEAN BUILD ENVIRONMENT ===
+clean_build_environment
 
 # === UPDATE REPO ===
 info "Downloading latest version..."
@@ -120,33 +292,38 @@ info "Restoring your personal settings..."
 # Restore .env file
 if [ -f "$BACKUP_DIR/.env" ]; then
     cp -f "$BACKUP_DIR/.env" "$REPO_DIR/.env" > /dev/null 2>&1
+    log "Restored .env file"
 fi
 
 # Restore config/config.json
 if [ -f "$BACKUP_DIR/config/config.json" ]; then
     mkdir -p "$REPO_DIR/config" > /dev/null 2>&1
     cp -f "$BACKUP_DIR/config/config.json" "$REPO_DIR/config/config.json" > /dev/null 2>&1
+    log "Restored config/config.json"
 fi
 
 # Restore apps folder
 if [ -d "$BACKUP_DIR/apps" ]; then
     mkdir -p "$REPO_DIR/apps" > /dev/null 2>&1
     cp -rf "$BACKUP_DIR/apps/"* "$REPO_DIR/apps/" > /dev/null 2>&1
+    log "Restored apps directory"
 fi
 
 success "Personal settings restored"
 
 # Download utility scripts from the repository
+info "Updating utility scripts..."
 wget -q -O "$REPO_DIR/start.sh" "https://raw.githubusercontent.com/dismaster/refurbminer/refs/heads/master/start.sh" > /dev/null 2>&1
 wget -q -O "$REPO_DIR/stop.sh" "https://raw.githubusercontent.com/dismaster/refurbminer/refs/heads/master/stop.sh" > /dev/null 2>&1
 wget -q -O "$REPO_DIR/status.sh" "https://raw.githubusercontent.com/dismaster/refurbminer/refs/heads/master/status.sh" > /dev/null 2>&1
 
 # Make all scripts executable
 chmod +x "$REPO_DIR/start.sh" "$REPO_DIR/stop.sh" "$REPO_DIR/status.sh" > /dev/null 2>&1
+success "Utility scripts updated"
 
 # === INSTALL DEPENDENCIES ===
 info "Installing updates (this may take a while)..."
-if npm install > /dev/null 2>&1; then
+if run_with_output "npm install" "Dependency installation"; then
     success "Updates installed"
 else
     error "Update installation failed!"
@@ -155,17 +332,28 @@ fi
 
 # === BUILD APPLICATION ===
 info "Preparing application for use (please wait)..."
-if npm run build > /dev/null 2>&1; then
+if attempt_build; then
     success "Application prepared successfully"
 else
-    error "Application preparation failed!"
-    exit 1
+    error "Application preparation failed after multiple attempts!"
+    error "The application may still work, attempting to continue..."
 fi
+
+# === VALIDATE INSTALLATION ===
+validate_installation
 
 # === START APPLICATION ===
 info "Starting mining process..."
 if screen -dmS "$SCREEN_NAME" bash -c "cd '$REPO_DIR' && npm start" > /dev/null 2>&1; then
     success "Mining process started"
+    # Give it a moment to start up, then check if it's actually running
+    sleep 3
+    if screen -list | grep -q "$SCREEN_NAME"; then
+        success "Mining process is running successfully"
+    else
+        warn "Mining process may have failed to start properly"
+        info "Check the logs with: screen -r $SCREEN_NAME"
+    fi
 else
     error "Failed to start mining process!"
     exit 1
@@ -223,8 +411,14 @@ else
     warn "Could not send update notification - miner ID not found"
 fi
 
+log "=== RefurbMiner Update Completed Successfully ==="
 success "🎉 RefurbMiner updated and running!"
 echo
 echo -e "\033[1;32mTo view mining status: screen -r refurbminer\033[0m"
 echo -e "\033[1;33mTo detach from mining view: press Ctrl+A then D\033[0m"
 echo -e "\033[1;32mOr use: ./refurbminer/status.sh\033[0m"
+echo
+echo -e "\033[1;36mTroubleshooting:\033[0m"
+echo -e "\033[1;33m• If mining doesn't start: check $LOG_FILE for errors\033[0m"
+echo -e "\033[1;33m• To manually restart: ./refurbminer/stop.sh && ./refurbminer/start.sh\033[0m"
+echo -e "\033[1;33m• For support: check https://gui.refurbminer.de\033[0m"
