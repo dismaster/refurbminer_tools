@@ -262,28 +262,212 @@ clean_build_environment
 
 # === UPDATE REPO ===
 info "Downloading latest version..."
-# First, explicitly remove the problematic file
-if [ -f "$REPO_DIR/apps/ccminer/config.json" ]; then
-    rm -f "$REPO_DIR/apps/ccminer/config.json" > /dev/null 2>&1
+
+# Function to check network connectivity
+check_network_connectivity() {
+    info "Checking network connectivity..."
+    
+    # Test basic internet connectivity
+    if ping -c 1 8.8.8.8 >> "$LOG_FILE" 2>&1; then
+        log "Basic internet connectivity confirmed"
+    else
+        warn "No internet connectivity detected"
+        return 1
+    fi
+    
+    # Test GitHub connectivity
+    if ping -c 1 github.com >> "$LOG_FILE" 2>&1; then
+        log "GitHub connectivity confirmed"
+    else
+        warn "Cannot reach GitHub servers"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Function to check git configuration
+check_git_configuration() {
+    info "Checking git configuration..."
+    
+    # Check if we're in a git repository
+    if ! git rev-parse --git-dir >> "$LOG_FILE" 2>&1; then
+        error "Not in a git repository"
+        return 1
+    fi
+    
+    # Check git remote configuration
+    local remote_url=$(git remote get-url origin 2>/dev/null)
+    if [ -z "$remote_url" ]; then
+        warn "No git remote 'origin' configured"
+        log "Adding origin remote"
+        if git remote add origin "https://github.com/dismaster/refurbminer.git" >> "$LOG_FILE" 2>&1; then
+            log "Added origin remote successfully"
+        else
+            error "Failed to add origin remote"
+            return 1
+        fi
+    else
+        log "Git remote origin: $remote_url"
+        # Ensure it's the correct URL
+        if [[ "$remote_url" != *"dismaster/refurbminer"* ]]; then
+            warn "Incorrect remote URL detected, updating..."
+            if git remote set-url origin "https://github.com/dismaster/refurbminer.git" >> "$LOG_FILE" 2>&1; then
+                log "Updated remote URL successfully"
+            else
+                error "Failed to update remote URL"
+                return 1
+            fi
+        fi
+    fi
+    
+    return 0
+}
+
+# Function to attempt git update with multiple strategies
+attempt_git_update() {
+    local update_success=false
+    
+    # First, explicitly remove the problematic file
+    if [ -f "$REPO_DIR/apps/ccminer/config.json" ]; then
+        rm -f "$REPO_DIR/apps/ccminer/config.json" >> "$LOG_FILE" 2>&1
+        log "Removed problematic config.json file"
+    fi
+    
+    # Strategy 1: Standard git pull
+    info "Attempting standard git pull..."
+    if git pull origin master >> "$LOG_FILE" 2>&1; then
+        update_success=true
+        log "Standard git pull succeeded"
+    else
+        warn "Standard git pull failed, trying alternative methods..."
+        log "Standard git pull failed with exit code $?"
+        
+        # Strategy 2: Clean and fetch/reset
+        info "Trying clean and reset approach..."
+        git clean -fd >> "$LOG_FILE" 2>&1
+        git reset --hard HEAD >> "$LOG_FILE" 2>&1
+        
+        if git fetch origin >> "$LOG_FILE" 2>&1; then
+            log "Git fetch succeeded"
+            if git reset --hard origin/master >> "$LOG_FILE" 2>&1; then
+                update_success=true
+                log "Git reset to origin/master succeeded"
+            else
+                log "Git reset failed with exit code $?"
+            fi
+        else
+            log "Git fetch failed with exit code $?"
+        fi
+        
+        # Strategy 3: Force checkout
+        if [ "$update_success" = false ]; then
+            warn "Trying force checkout..."
+            if git fetch origin >> "$LOG_FILE" 2>&1; then
+                if git checkout -f origin/master >> "$LOG_FILE" 2>&1; then
+                    update_success=true
+                    log "Force checkout succeeded"
+                else
+                    log "Force checkout failed with exit code $?"
+                fi
+            fi
+        fi
+        
+        # Strategy 4: Re-clone if all else fails
+        if [ "$update_success" = false ]; then
+            warn "All git update methods failed. Attempting to re-clone repository..."
+            
+            # Move current directory to backup location
+            local repo_backup="${REPO_DIR}_failed_$(date +%Y%m%d%H%M%S)"
+            if mv "$REPO_DIR" "$repo_backup" >> "$LOG_FILE" 2>&1; then
+                log "Moved failed repository to $repo_backup"
+                
+                # Try to clone fresh
+                if git clone "https://github.com/dismaster/refurbminer.git" "$REPO_DIR" >> "$LOG_FILE" 2>&1; then
+                    update_success=true
+                    log "Fresh clone succeeded"
+                    
+                    # Navigate back to the repo directory
+                    cd "$REPO_DIR" || { error "Failed to enter new repository directory"; return 1; }
+                    
+                    # Copy back important files from backup
+                    if [ -f "$repo_backup/.env" ]; then
+                        cp "$repo_backup/.env" "$REPO_DIR/.env" >> "$LOG_FILE" 2>&1
+                        log "Restored .env from failed repo"
+                    fi
+                    
+                    if [ -d "$repo_backup/apps" ]; then
+                        cp -rf "$repo_backup/apps" "$REPO_DIR/" >> "$LOG_FILE" 2>&1
+                        log "Restored apps directory from failed repo"
+                    fi
+                    
+                    if [ -d "$repo_backup/config" ]; then
+                        cp -rf "$repo_backup/config" "$REPO_DIR/" >> "$LOG_FILE" 2>&1
+                        log "Restored config directory from failed repo"
+                    fi
+                else
+                    log "Fresh clone also failed with exit code $?"
+                    # Restore original directory
+                    mv "$repo_backup" "$REPO_DIR" >> "$LOG_FILE" 2>&1
+                    log "Restored original repository directory"
+                    cd "$REPO_DIR" || { error "Failed to return to repository directory"; return 1; }
+                fi
+            else
+                log "Failed to backup current repository"
+            fi
+        fi
+    fi
+    
+    if [ "$update_success" = true ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Perform network connectivity check
+if ! check_network_connectivity; then
+    error "Network connectivity issues detected. Please check your internet connection."
+    echo
+    echo -e "\033[1;36mTroubleshooting network issues:\033[0m"
+    echo -e "\033[1;33m• Check if you have internet connectivity: ping google.com\033[0m"
+    echo -e "\033[1;33m• If using mobile data, ensure data is enabled\033[0m"
+    echo -e "\033[1;33m• If using WiFi, check if you need to authenticate\033[0m"
+    echo -e "\033[1;33m• Try running the update script again in a few minutes\033[0m"
+    echo -e "\033[1;33m• Check $LOG_FILE for detailed network diagnostics\033[0m"
+    exit 1
 fi
 
-# Reset and clean repository
-git reset --hard HEAD > /dev/null 2>&1
-git clean -fd > /dev/null 2>&1
+# Check git configuration
+if ! check_git_configuration; then
+    error "Git repository configuration issues detected."
+    echo -e "\033[1;36mTry these git troubleshooting steps:\033[0m"
+    echo -e "\033[1;33m• Check if you're in the right directory: pwd\033[0m"
+    echo -e "\033[1;33m• Verify git repository: git status\033[0m"
+    echo -e "\033[1;33m• Check git remote: git remote -v\033[0m"
+    echo -e "\033[1;33m• Check $LOG_FILE for detailed git diagnostics\033[0m"
+    exit 1
+fi
 
-# Try standard pull first
-if git pull origin master > /dev/null 2>&1; then
+# Attempt the git update
+if attempt_git_update; then
     success "Downloaded latest version"
 else
-    # If standard pull fails, try more aggressive approach
-    info "Using alternative download method..."
-    git fetch origin > /dev/null 2>&1
-    if git checkout -f origin/master > /dev/null 2>&1; then
-        success "Downloaded latest version"
-    else
-        error "Update failed. Check your internet connection."
-        exit 1
-    fi
+    error "Failed to download latest version after trying multiple methods."
+    echo
+    echo -e "\033[1;31mThis could be due to:\033[0m"
+    echo -e "\033[1;31m  • Temporary network issues\033[0m"
+    echo -e "\033[1;31m  • GitHub server problems\033[0m"
+    echo -e "\033[1;31m  • Git repository corruption\033[0m"
+    echo -e "\033[1;31m  • Local file permission problems\033[0m"
+    echo
+    echo -e "\033[1;36mManual recovery options:\033[0m"
+    echo -e "\033[1;33m1. Wait a few minutes and try again\033[0m"
+    echo -e "\033[1;33m2. Check detailed logs: cat $LOG_FILE\033[0m"
+    echo -e "\033[1;33m3. Try manually: cd $REPO_DIR && git pull origin master\033[0m"
+    echo -e "\033[1;33m4. Check network: ping github.com\033[0m"
+    echo -e "\033[1;33m5. If all else fails, backup your config and reinstall RefurbMiner\033[0m"
+    exit 1
 fi
 
 # === RESTORE IMPORTANT FILES ===
