@@ -1291,7 +1291,11 @@ download_script() {
         fi
     done
     
-    return $download_success
+    if [ "$download_success" = true ]; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 # Download each script with verification
