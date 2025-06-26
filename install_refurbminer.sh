@@ -5,6 +5,23 @@ REPO_URL="https://github.com/dismaster/refurbminer"
 INSTALL_DIR="$HOME/refurbminer"
 LOG_FILE="$HOME/refurbminer_install.log"
 
+# Exit handler for unexpected errors
+exit_handler() {
+    local exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        echo -e "\n\033[0;31m❌ Installation failed with exit code: $exit_code\033[0m"
+        echo -e "\033[0;33m⚠️ Check the log file for details: $LOG_FILE\033[0m"
+        echo -e "\033[0;36mCommon solutions:\033[0m"
+        echo -e "  - Run with sudo: sudo ./install_refurbminer.sh"
+        echo -e "  - Check network connectivity"
+        echo -e "  - Ensure you have sufficient disk space"
+        echo -e "  - Try bypassing CPU check: ./install_refurbminer.sh --bypass-cpu-check"
+    fi
+}
+
+# Set up exit trap
+trap exit_handler EXIT
+
 # === Command Line Arguments ===
 RIG_TOKEN=""
 SHOW_HELP=false
@@ -522,27 +539,44 @@ detect_os_and_setup_packages() {
         log "Running as non-root user"
         # Check if sudo is available
         if command -v sudo &>/dev/null; then
-            # Verify sudo works without asking for password
+            # Check if we have passwordless sudo
             if sudo -n true 2>/dev/null; then
                 HAS_SUDO=true
                 log "Sudo is available and configured for passwordless use"
             else
-                # Try with a fake command to see if sudo prompts for password or fails
-                sudo_output=$(sudo -l 2>&1)
-                if echo "$sudo_output" | grep -q "password"; then
-                    HAS_SUDO=true
-                    log "Sudo is available but requires password"
-                    display "Note: You may be prompted for your password during installation"
-                else
-                    log "Sudo is not available or user doesn't have sudo privileges"
-                    warn "No sudo privileges detected. Some features may not work properly."
-                fi
+                # Assume sudo might work but requires password - we'll test it when needed
+                HAS_SUDO=true
+                log "Sudo command found, assuming it will work with password if needed"
+                display "Note: You may be prompted for your password during installation"
             fi
         else
             log "Sudo command not found"
             warn "The 'sudo' command is not available on this system."
         fi
     fi
+    
+    # Function to test sudo privileges early
+    test_sudo_privileges() {
+        if [ "$HAS_SUDO" = true ] && [ "$IS_ROOT" = false ]; then
+            log "Testing sudo privileges..."
+            if ! sudo -n true 2>/dev/null; then
+                # Need password, let's test with a simple command
+                display "Testing sudo access (you may be prompted for your password)..."
+                if sudo true 2>/dev/null; then
+                    log "Sudo privileges confirmed"
+                    return 0
+                else
+                    error "Sudo test failed. Please check your sudo privileges."
+                    error "Make sure you're in the sudo group or have sudo access configured."
+                    return 1
+                fi
+            else
+                log "Passwordless sudo confirmed"
+                return 0
+            fi
+        fi
+        return 0
+    }
     
     # Function to execute commands with appropriate privilege level
     exec_pkg_cmd() {
@@ -551,11 +585,36 @@ detect_os_and_setup_packages() {
         if [ "$IS_ROOT" = true ]; then
             # Already root, execute directly
             log "Executing as root: ${cmd_args[*]}"
-            run_silent "${cmd_args[@]}"
+            if run_silent "${cmd_args[@]}"; then
+                return 0
+            else
+                error "Failed to execute: ${cmd_args[*]}"
+                return 1
+            fi
         elif [ "$HAS_SUDO" = true ]; then
             # Use sudo
             log "Executing with sudo: ${cmd_args[*]}"
-            run_silent sudo "${cmd_args[@]}"
+            if run_silent sudo "${cmd_args[@]}"; then
+                return 0
+            else
+                local exit_code=$?
+                error "Failed to execute with sudo: ${cmd_args[*]}"
+                if [ $exit_code -eq 1 ]; then
+                    error "Command failed. This might be due to:"
+                    error "- Network connectivity issues"
+                    error "- Package repository problems"
+                    error "- Missing dependencies"
+                elif [ $exit_code -eq 130 ]; then
+                    error "Command was interrupted (Ctrl+C pressed)"
+                else
+                    error "Sudo command failed with exit code: $exit_code"
+                    error "This might be due to:"
+                    error "- Incorrect password"
+                    error "- Insufficient sudo privileges"
+                    error "- System configuration issues"
+                fi
+                return $exit_code
+            fi
         else
             # No sudo, no root - try direct execution and hope it works
             # (useful for user-level package managers or containers)
@@ -588,6 +647,13 @@ detect_os_and_setup_packages() {
             IS_SBC=true
             log "SBC detected: $SBC_MODEL"
         fi
+    fi
+    
+    # Test sudo privileges early if needed
+    if ! test_sudo_privileges; then
+        error "Cannot proceed without proper privileges."
+        error "Please ensure you have sudo access or run this script as root."
+        return 1
     fi
     
     # Update system and install required packages
@@ -698,6 +764,16 @@ detect_os_and_setup_packages() {
     # Export the variables for use in other functions
     export IS_ROOT HAS_SUDO
     export -f exec_cmd
+    
+    # Log privilege summary
+    log "Privilege summary: IS_ROOT=$IS_ROOT, HAS_SUDO=$HAS_SUDO"
+    if [ "$IS_ROOT" = true ]; then
+        display "Running with root privileges"
+    elif [ "$HAS_SUDO" = true ]; then
+        display "Running with sudo privileges"
+    else
+        display "Running without elevated privileges"
+    fi
     
     return 0
 }
@@ -1176,38 +1252,119 @@ run_silent chmod +x "$INSTALL_DIR/apps/ccminer/ccminer"
 
 # Download utility scripts first before trying to make them executable
 display "Downloading utility scripts..."
-run_silent wget -q -O "$INSTALL_DIR/start.sh" "https://raw.githubusercontent.com/dismaster/refurbminer/master/scripts/start.sh"
-run_silent wget -q -O "$INSTALL_DIR/stop.sh" "https://raw.githubusercontent.com/dismaster/refurbminer/master/scripts/stop.sh"
-run_silent wget -q -O "$INSTALL_DIR/status.sh" "https://raw.githubusercontent.com/dismaster/refurbminer/master/scripts/status.sh"
+
+# Function to download and verify script content
+download_script() {
+    local script_name="$1"
+    local script_path="$INSTALL_DIR/$script_name"
+    
+    # Try multiple URL patterns for the script
+    local urls=(
+        "https://raw.githubusercontent.com/dismaster/refurbminer/master/$script_name"
+        "https://raw.githubusercontent.com/dismaster/refurbminer/main/$script_name"
+        "https://github.com/dismaster/refurbminer/raw/master/$script_name"
+        "https://github.com/dismaster/refurbminer/raw/main/$script_name"
+    )
+    
+    local download_success=false
+    
+    for url in "${urls[@]}"; do
+        log "Trying to download $script_name from: $url"
+        if wget -q -O "$script_path" "$url" >> "$LOG_FILE" 2>&1; then
+            # Check if the downloaded file has content and is not an error page
+            if [ -s "$script_path" ] && ! grep -q "404: Not Found\|403: Forbidden" "$script_path" 2>/dev/null; then
+                # Verify it looks like a shell script
+                if head -1 "$script_path" | grep -q "^#!/" || grep -q "screen\|npm\|refurbminer" "$script_path"; then
+                    log "Successfully downloaded $script_name from $url"
+                    download_success=true
+                    break
+                else
+                    log "Downloaded $script_name but content doesn't look like a valid script"
+                    rm -f "$script_path"
+                fi
+            else
+                log "Downloaded $script_name but file is empty or contains error page"
+                rm -f "$script_path"
+            fi
+        else
+            log "Failed to download $script_name from $url"
+        fi
+    done
+    
+    return $download_success
+}
+
+# Download each script with verification
+if download_script "start.sh"; then
+    log "start.sh downloaded successfully"
+else
+    warn "Failed to download start.sh from repository"
+fi
+
+if download_script "stop.sh"; then
+    log "stop.sh downloaded successfully"
+else
+    warn "Failed to download stop.sh from repository"
+fi
+
+if download_script "status.sh"; then
+    log "status.sh downloaded successfully"
+else
+    warn "Failed to download status.sh from repository"
+fi
 
 # Make all scripts executable (only once)
 run_silent chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/status.sh"
 
-# Verify scripts were downloaded successfully
-if [ -f "$INSTALL_DIR/start.sh" ] && [ -f "$INSTALL_DIR/stop.sh" ] && [ -f "$INSTALL_DIR/status.sh" ]; then
+# Verify scripts were downloaded successfully and have content
+start_ok=false
+stop_ok=false
+status_ok=false
+
+if [ -f "$INSTALL_DIR/start.sh" ] && [ -s "$INSTALL_DIR/start.sh" ]; then
+    start_ok=true
+fi
+
+if [ -f "$INSTALL_DIR/stop.sh" ] && [ -s "$INSTALL_DIR/stop.sh" ]; then
+    stop_ok=true
+fi
+
+if [ -f "$INSTALL_DIR/status.sh" ] && [ -s "$INSTALL_DIR/status.sh" ]; then
+    status_ok=true
+fi
+
+if [ "$start_ok" = true ] && [ "$stop_ok" = true ] && [ "$status_ok" = true ]; then
     success "Utility scripts installed successfully"
-    log "Utility scripts installed in $INSTALL_DIR"
+    log "All utility scripts installed in $INSTALL_DIR"
 else
-    warn "Failed to download one or more utility scripts"
+    warn "One or more utility scripts failed to download properly"
     log "Issues downloading utility scripts from repository"
     
-    # Create basic fallback scripts if download fails
-    display "Creating basic fallback scripts..."
+    # Create fallback scripts only for missing ones
+    display "Creating fallback scripts for missing utilities..."
     
-    cat > "$INSTALL_DIR/start.sh" << 'EOF'
+    if [ "$start_ok" = false ]; then
+        log "Creating fallback start.sh"
+        cat > "$INSTALL_DIR/start.sh" << 'EOF'
 #!/bin/bash
 cd "$(dirname "$0")"
 screen -dmS refurbminer npm start
 echo "RefurbMiner started in background"
 EOF
+    fi
 
-    cat > "$INSTALL_DIR/stop.sh" << 'EOF'
+    if [ "$stop_ok" = false ]; then
+        log "Creating fallback stop.sh"
+        cat > "$INSTALL_DIR/stop.sh" << 'EOF'
 #!/bin/bash
 screen -S refurbminer -X quit
 echo "RefurbMiner stopped"
 EOF
+    fi
 
-    cat > "$INSTALL_DIR/status.sh" << 'EOF'
+    if [ "$status_ok" = false ]; then
+        log "Creating fallback status.sh"
+        cat > "$INSTALL_DIR/status.sh" << 'EOF'
 #!/bin/bash
 if screen -ls | grep -q "refurbminer"; then
     echo "RefurbMiner is running"
@@ -1217,9 +1374,10 @@ else
     exit 1
 fi
 EOF
+    fi
 
     run_silent chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/status.sh"
-    success "Created fallback utility scripts"
+    success "Created fallback utility scripts for missing files"
 fi
 
 # Download update script to the user's home directory
@@ -1444,3 +1602,27 @@ echo -e "${BLUE}You can also manually start it with:${NC} ${YELLOW}cd $INSTALL_D
 echo
 echo -e "${BLUE}Installation log saved to:${NC} $LOG_FILE"
 echo
+echo -e "\033[1;36mTo verify your installation:\033[0m"
+echo -e "  ${YELLOW}ls -la $INSTALL_DIR/*.sh${NC}  - Check if scripts exist and are executable"
+echo -e "  ${YELLOW}head -3 $INSTALL_DIR/start.sh${NC}  - View the start script content"
+echo -e "  ${YELLOW}$INSTALL_DIR/status.sh${NC}  - Test the status script"
+echo
+echo -e "${LC}Troubleshooting:${NC}"
+echo -e "  If you encounter permission errors:"
+echo -e "    - Make sure you're in the sudo group: ${YELLOW}groups \$USER${NC}"
+echo -e "    - Try running with sudo: ${YELLOW}sudo ./install_refurbminer.sh${NC}"
+echo -e "    - Or as root: ${YELLOW}su - && ./install_refurbminer.sh${NC}"
+echo -e "  If CPU compatibility check fails:"
+echo -e "    - Use bypass flag: ${YELLOW}./install_refurbminer.sh --bypass-cpu-check${NC}"
+echo -e "  For package installation issues:"
+echo -e "    - Update package lists: ${YELLOW}sudo apt update${NC}"
+echo -e "    - Check network connectivity"
+echo -e "  If utility scripts are empty or missing:"
+echo -e "    - Check: ${YELLOW}ls -la $INSTALL_DIR/*.sh${NC}"
+echo -e "    - Re-run the installer to download them again"
+echo -e "    - Manual download: ${YELLOW}wget -O $INSTALL_DIR/start.sh https://raw.githubusercontent.com/dismaster/refurbminer/master/start.sh${NC}"
+echo -e "  Check the log file for detailed error information: ${YELLOW}$LOG_FILE${NC}"
+echo
+
+# Disable exit handler since we completed successfully
+trap - EXIT
