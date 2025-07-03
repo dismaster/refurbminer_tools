@@ -392,79 +392,126 @@ termux_setup() {
     
     # Update the Termux package installation line first
     display "Updating Termux packages..."
-    run_silent pkg update -y
-    run_silent pkg upgrade -y
-    display "Installing Termux packages..."
-    run_silent pkg install -y clang make cmake openssl cronie termux-services termux-auth libjansson wget nano git screen openssh termux-services libjansson netcat-openbsd jq termux-api iproute2 tsu android-tools nodejs
+    if ! run_silent pkg update -y; then
+        warn "Package update failed, but continuing installation..."
+    fi
     
-    # Now check for root access AFTER packages are installed
+    if ! run_silent pkg upgrade -y; then
+        warn "Package upgrade failed, but continuing installation..."
+    fi
+    
+    display "Installing essential Termux packages..."
+    # Install essential packages first
+    essential_packages="git nodejs npm wget screen"
+    for pkg in $essential_packages; do
+        if ! run_silent pkg install -y "$pkg"; then
+            warn "Failed to install $pkg, but continuing..."
+        fi
+    done
+    
+    display "Installing optional Termux packages..."
+    # Install optional packages (don't fail if these don't work)
+    optional_packages="clang make cmake openssl cronie termux-services termux-auth libjansson nano openssh netcat-openbsd jq termux-api iproute2 tsu android-tools"
+    for pkg in $optional_packages; do
+        if run_silent pkg install -y "$pkg"; then
+            log "Successfully installed optional package: $pkg"
+        else
+            log "Failed to install optional package: $pkg (this is okay)"
+        fi
+    done
+    
+    # Check for root access AFTER packages are installed (optional optimization)
     HAS_ROOT=false
     if command -v su &>/dev/null; then
+        log "Testing for root access..."
         if su -c "id -u" 2>/dev/null | grep -q "^0$"; then
             HAS_ROOT=true
-            success "Root access detected (device is rooted)"
+            success "Root access detected - performance optimizations available"
             log "Device has root access"
+        else
+            log "Root test failed or device is not rooted"
         fi
+    else
+        log "su command not available"
     fi
     
     if [ "$HAS_ROOT" = false ]; then
-        warn "Root access not detected. Mining performance may be limited."
-        log "Device does not have root access"
-        display "For optimal performance, consider rooting your device."
+        display "No root access detected (this is normal and fine)"
+        log "Device does not have root access - continuing without root optimizations"
     fi
     
-    # Check for ADB connectivity AFTER installing android-tools
+    # Check for ADB connectivity AFTER installing android-tools (optional optimization)
     HAS_ADB=false
     if command -v adb &>/dev/null; then
-        display "Checking ADB connection..."
+        log "ADB command is available, checking for connected devices..."
         adb_devices=$(adb devices 2>/dev/null)
         if echo "$adb_devices" | grep -q "device$"; then
             HAS_ADB=true
-            success "ADB connection detected"
+            success "ADB connection detected - additional optimizations available"
             log "ADB connection is available"
         else
-            # If ADB is installed but not connected, provide helpful instructions
-            warn "ADB is installed but no devices are connected"
+            # If ADB is installed but not connected, just log it
             log "ADB is installed but no connected devices found"
-            display "To use ADB, enable USB debugging in developer options and connect your device."
+            display "ADB is available but no devices connected (this is optional)"
         fi
+    else
+        log "ADB not available (this is optional)"
     fi
     
     # Verify critical installations with better error handling for Termux
-    if ! command -v git &>/dev/null || ! command -v node &>/dev/null; then
-        if ! command -v node &>/dev/null; then
-            warn "Node.js not detected. Attempting to install nodejs specifically..."
-            run_silent pkg install -y nodejs
-            
+    if ! command -v git &>/dev/null; then
+        error "Git installation failed! Please install manually with: pkg install git"
+        return 1
+    fi
+    
+    if ! command -v node &>/dev/null; then
+        warn "Node.js not detected. Attempting to install nodejs specifically..."
+        if run_silent pkg install -y nodejs; then
             # Check again after explicit installation
             if ! command -v node &>/dev/null; then
-                error "Node.js installation failed! Please try manually with: pkg install nodejs"
-                return 1
+                warn "Node.js installation failed! Will try to continue anyway."
+                warn "You may need to manually install Node.js with: pkg install nodejs"
+                log "Node.js installation failed but continuing with installation"
             else
                 success "Node.js installed successfully."
             fi
         else
-            error "Git or Node.js installation failed! Please install manually."
-            return 1
+            warn "Failed to install Node.js automatically."
+            warn "You may need to manually install Node.js with: pkg install nodejs"
+            log "Automatic Node.js installation failed but continuing"
         fi
+    else
+        success "Node.js is already installed."
     fi
     
-    # Start Termux services if available
+    # Start Termux services if available (optional)
     if command -v sv &>/dev/null; then
-        display "Setting up Termux services..."
+        log "Setting up optional Termux services..."
         
         # Ensure service directory exists
         if [ ! -d "$PREFIX/var/service/crond" ]; then
-            display "Creating crond service directory..."
-            run_silent mkdir -p "$PREFIX/var/service"
-            run_silent ln -sf "$PREFIX/share/termux-services/svlogger" "$PREFIX/var/service/"
-            run_silent ln -sf "$PREFIX/share/termux-services/crond" "$PREFIX/var/service/"
-            log "Created crond service directory"
+            log "Creating crond service directory..."
+            if run_silent mkdir -p "$PREFIX/var/service"; then
+                run_silent ln -sf "$PREFIX/share/termux-services/svlogger" "$PREFIX/var/service/" 2>/dev/null || true
+                run_silent ln -sf "$PREFIX/share/termux-services/crond" "$PREFIX/var/service/" 2>/dev/null || true
+                log "Created crond service directory"
+            fi
         fi
         
-        # Try to enable services with better error handling
-        run_silent sv-enable crond 2>/dev/null || warn "Failed to enable crond service"
-        run_silent sv up crond 2>/dev/null || warn "Failed to start crond service"
+        # Try to enable services (non-blocking)
+        if run_silent sv-enable crond 2>/dev/null; then
+            log "Successfully enabled crond service"
+        else
+            log "Failed to enable crond service (this is optional)"
+        fi
+        
+        if run_silent sv up crond 2>/dev/null; then
+            log "Successfully started crond service"
+        else
+            log "Failed to start crond service (this is optional)"
+        fi
+    else
+        log "Termux services not available (this is optional)"
     fi
     
     # If we have root, try to set optimal CPU governor
