@@ -213,14 +213,119 @@ fi
 
 # === STOP EXISTING SCREEN SESSION ===
 info "Checking for running instances..."
-if screen -list | grep -q "$SCREEN_NAME"; then
-    info "Stopping existing session '$SCREEN_NAME'..."
-    screen -S "$SCREEN_NAME" -X quit > /dev/null 2>&1
-    sleep 2
-    success "Stopped mining session"
-else
-    info "No active mining session found"
-fi
+
+# Function to thoroughly clean up running processes
+cleanup_running_processes() {
+    local cleanup_needed=false
+    
+    # Check for any screen sessions related to mining
+    if screen -list 2>/dev/null | grep -E "(refurbminer|miner)" > /dev/null; then
+        cleanup_needed=true
+        info "Found running screen sessions, cleaning up..."
+        
+        # Get all mining-related screen sessions
+        local sessions=$(screen -list 2>/dev/null | grep -E "(refurbminer|miner)" | awk '{print $1}' | cut -d. -f1)
+        
+        for session in $sessions; do
+            info "Stopping screen session: $session"
+            screen -S "$session" -X quit > /dev/null 2>&1
+        done
+        
+        # Wait a bit for sessions to close
+        sleep 3
+        
+        # Force kill any remaining screen processes
+        if screen -list 2>/dev/null | grep -E "(refurbminer|miner)" > /dev/null; then
+            warn "Some screen sessions didn't close gracefully, force killing..."
+            pkill -f "SCREEN.*refurbminer" 2>/dev/null || true
+            pkill -f "SCREEN.*miner" 2>/dev/null || true
+            sleep 2
+        fi
+    fi
+    
+    # Check for processes using port 3000 (RefurbMiner's default port)
+    local port_processes=$(lsof -ti:3000 2>/dev/null || netstat -tlnp 2>/dev/null | grep ":3000 " | awk '{print $7}' | cut -d/ -f1)
+    
+    if [ -n "$port_processes" ]; then
+        cleanup_needed=true
+        warn "Found processes using port 3000, terminating them..."
+        
+        for pid in $port_processes; do
+            if [ -n "$pid" ] && [ "$pid" != "-" ]; then
+                info "Killing process $pid using port 3000"
+                kill -TERM "$pid" 2>/dev/null || true
+            fi
+        done
+        
+        # Wait for graceful shutdown
+        sleep 5
+        
+        # Force kill if still running
+        for pid in $port_processes; do
+            if [ -n "$pid" ] && [ "$pid" != "-" ] && kill -0 "$pid" 2>/dev/null; then
+                warn "Force killing stubborn process $pid"
+                kill -KILL "$pid" 2>/dev/null || true
+            fi
+        done
+    fi
+    
+    # Check for any node processes running RefurbMiner
+    local node_processes=$(pgrep -f "node.*refurbminer\|npm.*start" 2>/dev/null || true)
+    
+    if [ -n "$node_processes" ]; then
+        cleanup_needed=true
+        warn "Found RefurbMiner node processes, terminating them..."
+        
+        for pid in $node_processes; do
+            if [ -n "$pid" ]; then
+                info "Killing RefurbMiner process $pid"
+                kill -TERM "$pid" 2>/dev/null || true
+            fi
+        done
+        
+        # Wait for graceful shutdown
+        sleep 3
+        
+        # Force kill if still running
+        for pid in $node_processes; do
+            if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                warn "Force killing stubborn node process $pid"
+                kill -KILL "$pid" 2>/dev/null || true
+            fi
+        done
+    fi
+    
+    # Clean up stale screen socket files
+    if [ -d "$HOME/.screen" ]; then
+        info "Cleaning up stale screen socket files..."
+        screen -wipe > /dev/null 2>&1 || true
+        
+        # Remove any remaining stale socket files
+        find "$HOME/.screen" -name "*refurbminer*" -type s -delete 2>/dev/null || true
+        find "$HOME/.screen" -name "*miner*" -type s -delete 2>/dev/null || true
+    fi
+    
+    if [ "$cleanup_needed" = true ]; then
+        success "Cleanup completed, waiting for system to stabilize..."
+        sleep 3
+        
+        # Final verification
+        if screen -list 2>/dev/null | grep -E "(refurbminer|miner)" > /dev/null; then
+            warn "Some screen sessions may still be running, but continuing with update..."
+        fi
+        
+        # Check if port 3000 is still in use
+        if lsof -ti:3000 2>/dev/null > /dev/null || netstat -tln 2>/dev/null | grep ":3000 " > /dev/null; then
+            warn "Port 3000 may still be in use, but continuing with update..."
+            warn "If the update fails to start, wait a few minutes and try again."
+        fi
+    else
+        info "No running instances found"
+    fi
+}
+
+# Perform the cleanup
+cleanup_running_processes
 
 # === BACKUP IMPORTANT FILES ===
 info "Creating backup of your configuration..."
@@ -528,12 +633,58 @@ validate_installation
 
 # === START APPLICATION ===
 info "Starting mining process..."
+
+# Function to check if port 3000 is available
+check_port_availability() {
+    local port=3000
+    local max_attempts=12  # Wait up to 1 minute (12 * 5 seconds)
+    local attempt=1
+    
+    while [ $attempt -le $max_attempts ]; do
+        # Check if port is in use
+        if ! (lsof -ti:$port 2>/dev/null > /dev/null || netstat -tln 2>/dev/null | grep ":$port " > /dev/null); then
+            log "Port $port is available"
+            return 0
+        fi
+        
+        if [ $attempt -eq 1 ]; then
+            warn "Port $port is still in use, waiting for it to become available..."
+        fi
+        
+        log "Attempt $attempt/$max_attempts: Port $port still in use, waiting 5 seconds..."
+        sleep 5
+        attempt=$((attempt + 1))
+    done
+    
+    error "Port $port is still in use after waiting. Cannot start RefurbMiner."
+    return 1
+}
+
+# Check port availability before starting
+if ! check_port_availability; then
+    error "Cannot start RefurbMiner because port 3000 is still in use."
+    echo
+    echo -e "\033[1;36mTroubleshooting steps:\033[0m"
+    echo -e "\033[1;33m• Wait a few more minutes and try running the update again\033[0m"
+    echo -e "\033[1;33m• Check what's using port 3000: lsof -ti:3000\033[0m"
+    echo -e "\033[1;33m• Manually kill processes: kill -9 \$(lsof -ti:3000)\033[0m"
+    echo -e "\033[1;33m• Restart your device if the issue persists\033[0m"
+    exit 1
+fi
+
 if screen -dmS "$SCREEN_NAME" bash -c "cd '$REPO_DIR' && npm start" > /dev/null 2>&1; then
     success "Mining process started"
     # Give it a moment to start up, then check if it's actually running
-    sleep 3
+    sleep 5
     if screen -list | grep -q "$SCREEN_NAME"; then
-        success "Mining process is running successfully"
+        # Additional check: verify the process is actually working
+        sleep 3
+        if lsof -ti:3000 2>/dev/null > /dev/null || netstat -tln 2>/dev/null | grep ":3000 " > /dev/null; then
+            success "Mining process is running successfully on port 3000"
+        else
+            warn "Mining process started but may not be listening on port 3000"
+            info "Check the logs with: screen -r $SCREEN_NAME"
+        fi
     else
         warn "Mining process may have failed to start properly"
         info "Check the logs with: screen -r $SCREEN_NAME"
@@ -605,4 +756,6 @@ echo
 echo -e "\033[1;36mTroubleshooting:\033[0m"
 echo -e "\033[1;33m• If mining doesn't start: check $LOG_FILE for errors\033[0m"
 echo -e "\033[1;33m• To manually restart: ./refurbminer/stop.sh && ./refurbminer/start.sh\033[0m"
+echo -e "\033[1;33m• If port 3000 is busy: killall screen && killall node\033[0m"
+echo -e "\033[1;33m• For complete cleanup: pkill -f refurbminer && screen -wipe\033[0m"
 echo -e "\033[1;33m• For support: check https://gui.refurbminer.de\033[0m"
