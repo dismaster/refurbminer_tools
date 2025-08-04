@@ -541,7 +541,7 @@ detect_os_and_setup_packages() {
     
     OS="unknown"
     OS_NAME="unknown"
-    if grep -qEi "termux" <<< "$PREFIX"; then
+    if grep -qEi "termux" <<< "$PREFIX" || [ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux" ]; then
         OS="termux"
         OS_NAME="Termux"
     elif [ -f "/etc/os-release" ]; then
@@ -572,8 +572,20 @@ detect_os_and_setup_packages() {
     export OS
     
     display "Detected OS: $OS_NAME"
-    log "OS detection: ID=$ID, OS=$OS, NAME=$OS_NAME"
+    log "OS detection: ID=${ID:-unknown}, OS=$OS, NAME=$OS_NAME"
     
+    # Handle Termux separately - it doesn't use sudo
+    if [ "$OS" = "termux" ]; then
+        display "Setting up Termux environment (no root privileges required)..."
+        if ! termux_setup; then
+            error "Failed to set up Termux environment"
+            return 1
+        fi
+        success "Termux environment setup completed successfully"
+        return 0
+    fi
+    
+    # For non-Termux systems, handle sudo and root privileges
     # Determine if sudo is available and if user has direct root privileges
     HAS_SUDO=false
     IS_ROOT=false
@@ -706,11 +718,7 @@ detect_os_and_setup_packages() {
     # Update system and install required packages
     display "Updating system packages... (this may take a while)"
     
-    case "$OS" in
-        termux)
-            termux_setup
-            ;;
-            
+    case "$OS" in            
         debian|raspberrypi)
             display "Setting up $OS_NAME environment..."
             # Update repositories
