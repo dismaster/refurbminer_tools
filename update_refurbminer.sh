@@ -372,20 +372,51 @@ info "Downloading latest version..."
 check_network_connectivity() {
     info "Checking network connectivity..."
     
-    # Test basic internet connectivity
-    if ping -c 1 8.8.8.8 >> "$LOG_FILE" 2>&1; then
-        log "Basic internet connectivity confirmed"
+    # Test basic internet connectivity using HTTP instead of ping
+    # Many networks block ICMP ping but allow HTTP traffic
+    if curl -s --connect-timeout 10 --max-time 15 "http://www.google.com" > /dev/null 2>&1; then
+        log "Basic internet connectivity confirmed via HTTP"
+    elif wget --timeout=10 --tries=1 -q --spider "http://www.google.com" 2>&1; then
+        log "Basic internet connectivity confirmed via wget"
     else
-        warn "No internet connectivity detected"
-        return 1
+        # Try HTTPS as fallback
+        if curl -s --connect-timeout 10 --max-time 15 "https://www.google.com" > /dev/null 2>&1; then
+            log "Basic internet connectivity confirmed via HTTPS"
+        elif wget --timeout=10 --tries=1 -q --spider "https://www.google.com" 2>&1; then
+            log "Basic internet connectivity confirmed via wget HTTPS"
+        else
+            # Try DNS resolution as another fallback
+            if command -v nslookup &>/dev/null && nslookup google.com 8.8.8.8 > /dev/null 2>&1; then
+                log "Basic internet connectivity confirmed via DNS lookup"
+            elif command -v dig &>/dev/null && dig @8.8.8.8 google.com > /dev/null 2>&1; then
+                log "Basic internet connectivity confirmed via dig"
+            else
+                warn "No internet connectivity detected"
+                log "All connectivity tests failed (HTTP, HTTPS, and DNS via curl, wget, nslookup, and dig)"
+                return 1
+            fi
+        fi
     fi
     
-    # Test GitHub connectivity
-    if ping -c 1 github.com >> "$LOG_FILE" 2>&1; then
-        log "GitHub connectivity confirmed"
+    # Test GitHub connectivity using HTTP methods
+    if curl -s --connect-timeout 10 --max-time 15 "https://api.github.com" > /dev/null 2>&1; then
+        log "GitHub connectivity confirmed via HTTPS API"
+    elif wget --timeout=10 --tries=1 -q --spider "https://github.com" 2>&1; then
+        log "GitHub connectivity confirmed via wget"
+    elif curl -s --connect-timeout 10 --max-time 15 "https://github.com" > /dev/null 2>&1; then
+        log "GitHub connectivity confirmed via HTTPS"
     else
-        warn "Cannot reach GitHub servers"
-        return 1
+        # Try DNS resolution for GitHub as fallback
+        if command -v nslookup &>/dev/null && nslookup github.com 8.8.8.8 > /dev/null 2>&1; then
+            log "GitHub connectivity confirmed via DNS lookup (HTTP methods failed but DNS works)"
+        elif command -v dig &>/dev/null && dig @8.8.8.8 github.com > /dev/null 2>&1; then
+            log "GitHub connectivity confirmed via dig (HTTP methods failed but DNS works)"
+        else
+            warn "Cannot reach GitHub servers via HTTP methods or DNS"
+            log "GitHub connectivity test failed - but this might be due to network restrictions"
+            # Don't fail here as the main git operations might still work
+            log "Continuing with update as basic internet connectivity was confirmed"
+        fi
     fi
     
     return 0
@@ -535,9 +566,12 @@ if ! check_network_connectivity; then
     error "Network connectivity issues detected. Please check your internet connection."
     echo
     echo -e "\033[1;36mTroubleshooting network issues:\033[0m"
-    echo -e "\033[1;33m• Check if you have internet connectivity: ping google.com\033[0m"
+    echo -e "\033[1;33m• Test connectivity manually: curl -s https://www.google.com\033[0m"
+    echo -e "\033[1;33m• Or try: wget --spider https://github.com\033[0m"
+    echo -e "\033[1;33m• Test DNS resolution: nslookup google.com 8.8.8.8\033[0m"
     echo -e "\033[1;33m• If using mobile data, ensure data is enabled\033[0m"
     echo -e "\033[1;33m• If using WiFi, check if you need to authenticate\033[0m"
+    echo -e "\033[1;33m• Some networks block certain traffic - try different network\033[0m"
     echo -e "\033[1;33m• Try running the update script again in a few minutes\033[0m"
     echo -e "\033[1;33m• Check $LOG_FILE for detailed network diagnostics\033[0m"
     exit 1
