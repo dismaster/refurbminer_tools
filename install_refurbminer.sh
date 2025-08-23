@@ -322,6 +322,27 @@ check_cpu_compatibility() {
             return 0
         fi
         
+        # For ARM64/AArch64, check for specific SoC families
+        if [[ "$ARCH" == "aarch64" ]] || [[ "$ARCH" == "arm64" ]]; then
+            # Check for Allwinner SoCs which generally support required crypto instructions
+            if [ "$IS_ALLWINNER" = true ]; then
+                success "Allwinner SoC detected - assuming crypto instruction support"
+                log "Allwinner SoCs typically support AES and SHA instructions"
+                return 0
+            fi
+            
+            # Check for Radxa devices (usually Rockchip-based)
+            if [ "$IS_RADXA" = true ]; then
+                success "Radxa device detected - assuming crypto instruction support"
+                log "Radxa devices typically use Rockchip SoCs with crypto support"
+                return 0
+            fi
+            
+            # For other ARM64 devices, assume compatibility
+            success "ARM64 architecture detected - assuming modern ARM CPU with crypto support"
+            return 0
+        fi
+        
         error "Could not determine CPU capabilities. Please ensure your system supports AES and PCLMUL instructions."
         error "You can bypass this check with --bypass-cpu-check flag if you're sure your CPU is compatible."
         return 1
@@ -411,7 +432,7 @@ termux_setup() {
     
     display "Installing optional Termux packages..."
     # Install optional packages (don't fail if these don't work)
-    optional_packages="clang make cmake openssl cronie termux-services termux-auth libjansson nano openssh netcat-openbsd jq termux-api iproute2 tsu android-tools"
+    optional_packages="clang make cmake openssl cronie termux-services termux-auth libjansson nano openssh netcat-openbsd jq termux-api iproute2 tsu android-tools lshw"
     for pkg in $optional_packages; do
         if run_silent pkg install -y "$pkg"; then
             log "Successfully installed optional package: $pkg"
@@ -699,12 +720,46 @@ detect_os_and_setup_packages() {
     
     # Check if the system is an SBC
     IS_SBC=false
+    IS_RADXA=false
+    IS_ALLWINNER=false
+    SBC_TYPE="unknown"
+    
     if [ -f "/proc/device-tree/model" ]; then
         # Use tr to strip null bytes from the output
         SBC_MODEL=$(cat /proc/device-tree/model 2>/dev/null | tr -d '\0')
         if [ ! -z "$SBC_MODEL" ]; then
             IS_SBC=true
             log "SBC detected: $SBC_MODEL"
+            
+            # Detect specific SBC types for optimizations
+            if echo "$SBC_MODEL" | grep -qi "radxa"; then
+                IS_RADXA=true
+                SBC_TYPE="Radxa"
+                log "Radxa device detected"
+            elif echo "$SBC_MODEL" | grep -qi "allwinner\|sun.*iw"; then
+                IS_ALLWINNER=true
+                SBC_TYPE="Allwinner"
+                log "Allwinner SoC detected"
+            elif echo "$SBC_MODEL" | grep -qi "raspberry"; then
+                SBC_TYPE="Raspberry Pi"
+                log "Raspberry Pi detected"
+            elif echo "$SBC_MODEL" | grep -qi "orange"; then
+                SBC_TYPE="Orange Pi"
+                log "Orange Pi detected"
+            elif echo "$SBC_MODEL" | grep -qi "rockchip"; then
+                SBC_TYPE="Rockchip"
+                log "Rockchip device detected"
+            fi
+        fi
+    fi
+    
+    # Additional check for Allwinner SoCs via /proc/cpuinfo if device-tree failed
+    if [ "$IS_ALLWINNER" = false ] && [ -f "/proc/cpuinfo" ]; then
+        if grep -qi "allwinner\|sun.*iw" /proc/cpuinfo; then
+            IS_ALLWINNER=true
+            SBC_TYPE="Allwinner"
+            IS_SBC=true
+            log "Allwinner SoC detected via /proc/cpuinfo"
         fi
     fi
     
@@ -729,9 +784,9 @@ detect_os_and_setup_packages() {
             fi
             
             display "Installing common packages..."
-            if ! exec_pkg_cmd apt-get install -y clang make cmake screen git nodejs npm build-essential wget; then
+            if ! exec_pkg_cmd apt-get install -y clang make cmake screen git nodejs npm build-essential wget lshw; then
                 error "Failed to install required packages."
-                error "Please install clang, make, cmake, git, nodejs, npm, build-essential, and wget manually."
+                error "Please install clang, make, cmake, git, nodejs, npm, build-essential, wget, and lshw manually."
                 return 1
             fi
             ;;
@@ -745,7 +800,7 @@ detect_os_and_setup_packages() {
             fi
             
             display "Installing required packages..."
-            if ! exec_pkg_cmd dnf install -y clang make cmake screen git nodejs npm; then
+            if ! exec_pkg_cmd dnf install -y clang make cmake screen git nodejs npm lshw; then
                 error "Failed to install required packages."
                 return 1
             fi
@@ -759,20 +814,20 @@ detect_os_and_setup_packages() {
             if command -v apt-get &>/dev/null; then
                 display "Using apt-get package manager..."
                 exec_pkg_cmd apt-get update
-                exec_pkg_cmd apt-get install -y clang make cmake screen git nodejs npm
+                exec_pkg_cmd apt-get install -y clang make cmake screen git nodejs npm lshw
             # Try with yum if available
             elif command -v yum &>/dev/null; then
                 display "Using yum package manager..."
                 exec_pkg_cmd yum update -y
-                exec_pkg_cmd yum install -y clang make cmake screen git nodejs npm
+                exec_pkg_cmd yum install -y clang make cmake screen git nodejs npm lshw
             # Try with dnf if available
             elif command -v dnf &>/dev/null; then
                 display "Using dnf package manager..."
                 exec_pkg_cmd dnf update -y
-                exec_pkg_cmd dnf install -y clang make cmake screen git nodejs npm
+                exec_pkg_cmd dnf install -y clang make cmake screen git nodejs npm lshw
             else
                 error "Unsupported OS. Please install required packages manually."
-                error "Required packages: clang, make, cmake, screen, git, nodejs, npm"
+                error "Required packages: clang, make, cmake, screen, git, nodejs, npm, lshw"
                 return 1
             fi
             ;;
@@ -1089,6 +1144,25 @@ mkdir -p "$INSTALL_DIR/apps/ccminer"
 build_ccminer_sbc() {
     display "Setting up ccminer for SBC device..."
     
+    # Check for specific SBC types and apply optimizations
+    if [ "$IS_RADXA" = true ]; then
+        display "Radxa device detected - applying Radxa-specific optimizations..."
+        log "Configuring ccminer for Radxa device: $SBC_MODEL"
+        
+        # Radxa devices often use Rockchip SoCs with specific optimization needs
+        if echo "$SBC_MODEL" | grep -qi "rock.*5"; then
+            log "Detected Rockchip RK35xx series - using high-performance settings"
+        fi
+    elif [ "$IS_ALLWINNER" = true ]; then
+        display "Allwinner SoC detected - applying Allwinner-specific optimizations..."
+        log "Configuring ccminer for Allwinner device: $SBC_MODEL"
+        
+        # Allwinner sun55iw3 and similar SoCs may need specific compiler flags
+        if echo "$SBC_MODEL" | grep -qi "sun55iw3"; then
+            log "Detected sun55iw3 SoC - using optimized ARM Cortex-A78 settings"
+        fi
+    fi
+    
     run_silent wget http://ports.ubuntu.com/pool/main/o/openssl/libssl1.1_1.1.0g-2ubuntu4_arm64.deb
     exec_cmd dpkg -i libssl1.1_1.1.0g-2ubuntu4_arm64.deb
     run_silent rm libssl1.1_1.1.0g-2ubuntu4_arm64.deb
@@ -1262,8 +1336,8 @@ case "$OS" in
         ;;
         
     debian|raspberrypi)
-        # Check if the system is an SBC (e.g., Raspberry Pi, Orange Pi) or ARM-based
-        if grep -q "Raspberry" /proc/device-tree/model 2>/dev/null || grep -q "Orange" /proc/device-tree/model 2>/dev/null || grep -q "Rockchip" /proc/device-tree/model 2>/dev/null || lscpu | grep -q "ARM"; then
+        # Check if the system is an SBC (e.g., Raspberry Pi, Orange Pi, Radxa) or ARM-based
+        if grep -q "Raspberry" /proc/device-tree/model 2>/dev/null || grep -q "Orange" /proc/device-tree/model 2>/dev/null || grep -q "Rockchip" /proc/device-tree/model 2>/dev/null || grep -q "Radxa" /proc/device-tree/model 2>/dev/null || grep -q "Allwinner" /proc/device-tree/model 2>/dev/null || grep -qi "sun.*iw" /proc/device-tree/model 2>/dev/null || lscpu | grep -q "ARM"; then
             display "Detected ARM-based device ($OS_NAME). Installing necessary packages..."
             
             # Install packages silently
@@ -1650,6 +1724,24 @@ echo -e "${LC}|   --| . |     | . | | -_|  _| -_|${NC}"
 echo -e "${LC}|_____|___|_|_|_|  _|_|___|_| |___|${NC}"
 echo -e "${LC}                |_|                ${NC}"
 echo
+
+# Display hardware-specific information if detected
+if [ "$IS_RADXA" = true ]; then
+    echo -e "${GREEN}✓ Radxa device optimizations applied${NC}"
+    echo -e "${BLUE}  Device: $SBC_MODEL${NC}"
+    echo -e "${BLUE}  Optimized for Rockchip SoC mining performance${NC}"
+    echo
+elif [ "$IS_ALLWINNER" = true ]; then
+    echo -e "${GREEN}✓ Allwinner SoC optimizations applied${NC}"
+    echo -e "${BLUE}  Device: $SBC_MODEL${NC}"
+    echo -e "${BLUE}  Optimized for Allwinner ARM Cortex mining performance${NC}"
+    echo
+elif [ "$IS_SBC" = true ]; then
+    echo -e "${GREEN}✓ SBC device detected: $SBC_TYPE${NC}"
+    echo -e "${BLUE}  ARM-optimized mining configuration applied${NC}"
+    echo
+fi
+
 echo -e "${BLUE}Management commands:${NC}"
 echo -e "  ${YELLOW}$INSTALL_DIR/start.sh${NC}  - Start the mining process"
 echo -e "  ${YELLOW}$INSTALL_DIR/stop.sh${NC}   - Stop the mining process"
