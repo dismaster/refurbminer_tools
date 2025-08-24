@@ -92,9 +92,42 @@ clean_build_environment() {
     success "Build environment cleaned"
 }
 
+# Function to fix Termux-specific build issues
+fix_termux_build_issues() {
+    info "Fixing Termux-specific build issues..."
+    
+    # Clear problematic npm environment variables
+    unset npm_config_target_arch
+    unset npm_config_target_platform
+    export npm_config_target_arch=""
+    export npm_config_target_platform=""
+    
+    # Install NestJS CLI globally for Termux if missing
+    if ! command -v nest &>/dev/null; then
+        warn "NestJS CLI not found, installing globally..."
+        if run_with_output "npm install -g @nestjs/cli" "Global NestJS CLI installation"; then
+            success "NestJS CLI installed globally"
+        else
+            warn "Failed to install NestJS CLI globally, trying local installation..."
+            run_with_output "npm install @nestjs/cli" "Local NestJS CLI installation" || true
+        fi
+    fi
+    
+    # Install missing dev dependencies that might be needed for Termux
+    info "Ensuring build dependencies are available..."
+    run_with_output "npm install --save-dev webpack webpack-cli typescript" "Development dependencies" || true
+    
+    success "Termux build environment fixes applied"
+}
+
 # Function to attempt build with fallback options
 attempt_build() {
     info "Attempting to build application..."
+    
+    # Check if we're in Termux and apply fixes
+    if [ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux" ]; then
+        fix_termux_build_issues
+    fi
     
     # First attempt: standard build
     if run_with_output "npm run build" "Standard build"; then
@@ -115,6 +148,33 @@ attempt_build() {
     warn "Trying with legacy peer dependencies..."
     if run_with_output "npm install --legacy-peer-deps" "Install with legacy peer deps"; then
         if run_with_output "npm run build" "Build with legacy deps"; then
+            return 0
+        fi
+    fi
+    
+    # Fourth attempt: Try Termux-specific build approach
+    if [ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux" ]; then
+        warn "Trying Termux-specific build approach..."
+        
+        # Try to run the smart build script directly
+        if [ -f "$REPO_DIR/scripts/smart-build.js" ]; then
+            info "Running smart build script directly..."
+            if run_with_output "node scripts/smart-build.js" "Direct smart build"; then
+                return 0
+            fi
+        fi
+        
+        # Try webpack build directly if nest CLI is available
+        if command -v nest &>/dev/null; then
+            info "Attempting direct webpack build..."
+            if run_with_output "nest build --builder webpack" "Direct webpack build"; then
+                return 0
+            fi
+        fi
+        
+        # Try alternative build without nest CLI
+        info "Attempting alternative build without nest CLI..."
+        if run_with_output "npx webpack --config webpack.config.js" "Alternative webpack build"; then
             return 0
         fi
     fi
@@ -646,6 +706,16 @@ success "Utility scripts updated"
 
 # === INSTALL DEPENDENCIES ===
 info "Installing updates (this may take a while)..."
+
+# Clear problematic npm environment variables for Termux
+if [ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux" ]; then
+    info "Detected Termux environment, clearing problematic npm config..."
+    unset npm_config_target_arch
+    unset npm_config_target_platform
+    npm config delete target-arch 2>/dev/null || true
+    npm config delete target-platform 2>/dev/null || true
+fi
+
 if run_with_output "npm install" "Dependency installation"; then
     success "Updates installed"
 else
@@ -718,6 +788,16 @@ if screen -dmS "$SCREEN_NAME" bash -c "cd '$REPO_DIR' && npm start" > /dev/null 
         else
             warn "Mining process started but may not be listening on port 3000"
             info "Check the logs with: screen -r $SCREEN_NAME"
+            
+            # For Termux, provide additional troubleshooting
+            if [ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux" ]; then
+                warn "Termux detected - build issues may affect startup"
+                echo -e "\033[1;33mTermux troubleshooting:\033[0m"
+                echo -e "\033[1;33m• The app may work without the build step\033[0m"
+                echo -e "\033[1;33m• Check screen logs: screen -r $SCREEN_NAME\033[0m"
+                echo -e "\033[1;33m• Try manual start: cd $REPO_DIR && npm start\033[0m"
+                echo -e "\033[1;33m• Install NestJS CLI: npm install -g @nestjs/cli\033[0m"
+            fi
         fi
     else
         warn "Mining process may have failed to start properly"
@@ -725,6 +805,17 @@ if screen -dmS "$SCREEN_NAME" bash -c "cd '$REPO_DIR' && npm start" > /dev/null 
     fi
 else
     error "Failed to start mining process!"
+    
+    # Provide Termux-specific troubleshooting
+    if [ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux" ]; then
+        echo
+        echo -e "\033[1;36mTermux-specific troubleshooting:\033[0m"
+        echo -e "\033[1;33m• Build failures are common in Termux but app may still work\033[0m"
+        echo -e "\033[1;33m• Try manual start: cd $REPO_DIR && npm start\033[0m"
+        echo -e "\033[1;33m• Install missing tools: npm install -g @nestjs/cli\033[0m"
+        echo -e "\033[1;33m• Clear npm config: npm config delete target-arch && npm config delete target-platform\033[0m"
+        echo -e "\033[1;33m• Check if main files exist: ls -la $REPO_DIR/\033[0m"
+    fi
     exit 1
 fi
 
